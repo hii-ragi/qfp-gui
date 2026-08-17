@@ -12,6 +12,96 @@ from file_indexer.indexing import index_folder
 from file_indexer.search import search_files, show_stats
 
 
+class SettingsWindow(tk.Toplevel):
+    """設定ウィンドウを表示するクラスです。"""
+
+    def __init__(self, parent: tk.Tk, folder_var: tk.StringVar, db_var: tk.StringVar, 
+                 workers_var: tk.IntVar, max_text_bytes_var: tk.IntVar,
+                 on_index_start: callable) -> None:
+        super().__init__(parent)
+        self.title("Index Settings")
+        self.geometry("600x300")
+        self.resizable(True, True)
+        
+        self.folder_var = folder_var
+        self.db_var = db_var
+        self.workers_var = workers_var
+        self.max_text_bytes_var = max_text_bytes_var
+        self.on_index_start = on_index_start
+        self.parent = parent
+        self.index_button: ttk.Button | None = None
+        
+        self._build_widgets()
+        
+        # ウィンドウが閉じられる時の処理
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def _build_widgets(self) -> None:
+        """画面部品を組み立てます。"""
+        self.columnconfigure(0, weight=1)
+        
+        # Folder
+        ttk.Label(self, text="Folder").grid(row=0, column=0, sticky="w", padx=12, pady=(12, 6))
+        ttk.Entry(self, textvariable=self.folder_var).grid(row=0, column=1, columnspan=3, sticky="ew", padx=12, pady=(12, 6))
+        ttk.Button(self, text="Browse", command=self.choose_folder).grid(row=0, column=4, padx=(0, 12), pady=(12, 6))
+
+        # Database
+        ttk.Label(self, text="Database").grid(row=1, column=0, sticky="w", padx=12, pady=6)
+        ttk.Entry(self, textvariable=self.db_var).grid(row=1, column=1, columnspan=3, sticky="ew", padx=12, pady=6)
+        ttk.Button(self, text="Browse", command=self.choose_db).grid(row=1, column=4, padx=(0, 12), pady=6)
+
+        # Workers and Max text bytes
+        options_frame = ttk.Frame(self)
+        options_frame.grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=12)
+        options_frame.columnconfigure(1, weight=0)
+        options_frame.columnconfigure(3, weight=1)
+        
+        ttk.Label(options_frame, text="Workers").grid(row=0, column=0, sticky="w")
+        ttk.Spinbox(options_frame, from_=1, to=32, width=6, textvariable=self.workers_var).grid(row=0, column=1, padx=(6, 18))
+        
+        ttk.Label(options_frame, text="Max text bytes").grid(row=0, column=2, sticky="w")
+        ttk.Spinbox(options_frame, from_=1024, to=100 * 1024 * 1024, increment=1024, width=12, textvariable=self.max_text_bytes_var).grid(
+            row=0, column=3, padx=(6, 0), sticky="w"
+        )
+
+        # Button frame
+        button_frame = ttk.Frame(self)
+        button_frame.grid(row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
+        button_frame.columnconfigure(0, weight=1)
+        
+        ttk.Button(button_frame, text="Start Index", command=self.start_index).grid(row=4, column=0, sticky="w")
+        ttk.Button(button_frame, text="Close", command=self.on_closing).grid(row=4, column=1, sticky="w")
+
+    def choose_folder(self) -> None:
+        """インデックス対象フォルダを選択します。"""
+        folder = filedialog.askdirectory(initialdir=self.folder_var.get() or str(Path.cwd()))
+        if folder:
+            self.folder_var.set(folder)
+
+    def choose_db(self) -> None:
+        """SQLite DB ファイルを選択します。存在しないパスも指定できます。"""
+        db_path = filedialog.asksaveasfilename(
+            initialfile=Path(self.db_var.get()).name or DEFAULT_DB,
+            defaultextension=".sqlite3",
+            filetypes=[("SQLite database", "*.sqlite3 *.db"), ("All files", "*.*")],
+        )
+        if db_path:
+            self.db_var.set(db_path)
+
+    def start_index(self) -> None:
+        """インデックス作成を開始します。"""
+        self.on_index_start()
+
+    def set_index_button_state(self, state: str) -> None:
+        """インデックスボタンの状態を設定します。"""
+        if self.index_button:
+            self.index_button.configure(state=state)
+
+    def on_closing(self) -> None:
+        """ウィンドウを閉じます。"""
+        self.destroy()
+
+
 class QfpApp(tk.Tk):
     """フォルダのインデックス作成と検索を行う簡易 UI です。"""
 
@@ -23,6 +113,7 @@ class QfpApp(tk.Tk):
 
         self.message_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.index_thread: threading.Thread | None = None
+        self.settings_window: SettingsWindow | None = None
 
         self.folder_var = tk.StringVar(value=str(Path.cwd()))
         self.db_var = tk.StringVar(value=str((Path.cwd() / DEFAULT_DB).resolve()))
@@ -41,29 +132,13 @@ class QfpApp(tk.Tk):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
 
-        index_frame = ttk.LabelFrame(self, text="Index")
-        index_frame.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 8))
-        index_frame.columnconfigure(1, weight=1)
-
-        ttk.Label(index_frame, text="Folder").grid(row=0, column=0, sticky="w", padx=8, pady=6)
-        ttk.Entry(index_frame, textvariable=self.folder_var).grid(row=0, column=1, sticky="ew", padx=8, pady=6)
-        ttk.Button(index_frame, text="Browse", command=self.choose_folder).grid(row=0, column=2, padx=8, pady=6)
-
-        ttk.Label(index_frame, text="Database").grid(row=1, column=0, sticky="w", padx=8, pady=6)
-        ttk.Entry(index_frame, textvariable=self.db_var).grid(row=1, column=1, sticky="ew", padx=8, pady=6)
-        ttk.Button(index_frame, text="Browse", command=self.choose_db).grid(row=1, column=2, padx=8, pady=6)
-
-        options = ttk.Frame(index_frame)
-        options.grid(row=2, column=1, sticky="w", padx=8, pady=6)
-        ttk.Label(options, text="Workers").pack(side="left")
-        ttk.Spinbox(options, from_=1, to=32, width=6, textvariable=self.workers_var).pack(side="left", padx=(6, 18))
-        ttk.Label(options, text="Max text bytes").pack(side="left")
-        ttk.Spinbox(options, from_=1024, to=100 * 1024 * 1024, increment=1024, width=12, textvariable=self.max_text_bytes_var).pack(
-            side="left", padx=(6, 0)
-        )
-
-        self.index_button = ttk.Button(index_frame, text="Start Index", command=self.start_index)
-        self.index_button.grid(row=2, column=2, sticky="ew", padx=8, pady=6)
+        # ツールバーフレーム
+        toolbar_frame = ttk.Frame(self)
+        toolbar_frame.grid(row=0, column=0, sticky="ew", padx=12, pady=12)
+        toolbar_frame.columnconfigure(0, weight=1)
+        
+        ttk.Button(toolbar_frame, text="Index Settings", command=self.open_settings).pack(side="left", padx=(0, 8))
+        ttk.Button(toolbar_frame, text="Show Stats", command=self.show_stats).pack(side="left")
 
         progress_frame = ttk.Frame(self)
         progress_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
@@ -99,26 +174,25 @@ class QfpApp(tk.Tk):
         status = ttk.Label(self, textvariable=self.status_var, anchor="w")
         status.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 10))
 
-    def choose_folder(self) -> None:
-        """インデックス対象フォルダを選択します。"""
-        folder = filedialog.askdirectory(initialdir=self.folder_var.get() or str(Path.cwd()))
-        if folder:
-            self.folder_var.set(folder)
-
-    def choose_db(self) -> None:
-        """SQLite DB ファイルを選択します。存在しないパスも指定できます。"""
-        db_path = filedialog.asksaveasfilename(
-            initialfile=Path(self.db_var.get()).name or DEFAULT_DB,
-            defaultextension=".sqlite3",
-            filetypes=[("SQLite database", "*.sqlite3 *.db"), ("All files", "*.*")],
-        )
-        if db_path:
-            self.db_var.set(db_path)
+    def open_settings(self) -> None:
+        """設定ウィンドウを開きます。既に開いている場合は前面に表示します。"""
+        if self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            self.settings_window.focus()
+        else:
+            self.settings_window = SettingsWindow(
+                self, 
+                self.folder_var, 
+                self.db_var, 
+                self.workers_var, 
+                self.max_text_bytes_var,
+                self.start_index
+            )
 
     def start_index(self) -> None:
         """バックグラウンドでインデックス作成を開始します。"""
         if self.index_thread and self.index_thread.is_alive():
-            messagebox.showinfo("Gali-Ban", "Indexing is already running.")
+            messagebox.showinfo("QFP", "Indexing is already running.")
             return
 
         folder = Path(self.folder_var.get())
@@ -126,7 +200,10 @@ class QfpApp(tk.Tk):
         workers = max(1, self.workers_var.get())
         max_text_bytes = max(0, self.max_text_bytes_var.get())
 
-        self.index_button.configure(state="disabled")
+        # 設定ウィンドウのボタンを無効化
+        if self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.set_index_button_state("disabled")
+        
         self.progress.configure(maximum=100, value=0)
         self.progress_text_var.set("0 / 0, remaining 0")
         self.status_var.set("Indexing...")
@@ -178,7 +255,9 @@ class QfpApp(tk.Tk):
                 self.status_var.set(f"Indexing... {current}/{total} {label}")
             elif kind == "done":
                 self.progress.configure(value=self.progress["maximum"])
-                self.index_button.configure(state="normal")
+                # 設定ウィンドウのボタンを有効化
+                if self.settings_window and self.settings_window.winfo_exists():
+                    self.settings_window.set_index_button_state("normal")
                 self.status_var.set("Index complete")
                 stats = payload
                 self.progress_text_var.set(f"{stats.scanned} / {stats.scanned}, remaining 0")
@@ -190,9 +269,11 @@ class QfpApp(tk.Tk):
             elif kind == "error":
                 self.progress.configure(value=0)
                 self.progress_text_var.set("0 / 0, remaining 0")
-                self.index_button.configure(state="normal")
+                # 設定ウィンドウのボタンを有効化
+                if self.settings_window and self.settings_window.winfo_exists():
+                    self.settings_window.set_index_button_state("normal")
                 self.status_var.set("Error")
-                messagebox.showerror("Gali-Ban", str(payload))
+                messagebox.showerror("QFP", str(payload))
 
         self.after(100, self._poll_queue)
 
@@ -200,13 +281,13 @@ class QfpApp(tk.Tk):
         """検索を実行して結果を表示します。"""
         query = self.query_var.get().strip()
         if not query:
-            messagebox.showinfo("Gali-Ban", "Enter a search query.")
+            messagebox.showinfo("QFP", "Enter a search query.")
             return
 
         try:
             rows = search_files(Path(self.db_var.get()), query, self.limit_var.get())
         except Exception as exc:
-            messagebox.showerror("Gali-Ban", str(exc))
+            messagebox.showerror("QFP", str(exc))
             return
 
         self.output.delete("1.0", "end")
@@ -229,7 +310,7 @@ class QfpApp(tk.Tk):
         try:
             stats = show_stats(Path(self.db_var.get()))
         except Exception as exc:
-            messagebox.showerror("Gali-Ban", str(exc))
+            messagebox.showerror("QFP", str(exc))
             return
 
         self._append_output(

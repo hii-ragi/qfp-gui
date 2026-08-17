@@ -6,14 +6,15 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_DB = "file_index.sqlite3"
+DEFAULT_DB = "index.sqlite3"
 DEFAULT_WORKERS = min(4, (os.cpu_count() or 1) + 1)
 
 CONFIG_DIR = Path(__file__).resolve().parent
 DENY_PATTERNS_JSON = CONFIG_DIR / "deny_patterns.json"
 
 # 設定ファイルがない場合でも最低限除外しておくフォルダ名です。
-DEFAULT_DENIED_NAMES = {".git", "__pycache__", ".venv", "venv", "node_modules"}
+#DEFAULT_DENIED_NAMES = {".git", "__pycache__", ".venv", "venv", "node_modules"}
+DEFAULT_DENIED_NAMES = {}
 DEFAULT_DENIED_EXTENSIONS: set[str] = set()
 
 
