@@ -11,6 +11,8 @@ from file_indexer.config import DEFAULT_DB, DEFAULT_WORKERS
 from file_indexer.indexing import index_folder
 from file_indexer.search import search_files, show_stats
 
+import webbrowser
+
 
 class SettingsWindow(tk.Toplevel):
     """設定ウィンドウを表示するクラスです。"""
@@ -20,8 +22,8 @@ class SettingsWindow(tk.Toplevel):
                  on_index_start: callable) -> None:
         super().__init__(parent)
         self.title("Index Settings")
-        self.geometry("600x300")
-        self.resizable(True, True)
+        self.geometry("600x270")
+        self.resizable(False, False)
         
         self.folder_var = folder_var
         self.db_var = db_var
@@ -74,9 +76,19 @@ class SettingsWindow(tk.Toplevel):
         button_frame = ttk.Frame(self)
         button_frame.grid(row=3, column=0, columnspan=5, sticky="ew", padx=12, pady=(0, 12))
         button_frame.columnconfigure(0, weight=1)
-        
+
         ttk.Button(button_frame, text="Start Index", command=self.start_index).grid(row=4, column=0, sticky="w")
         ttk.Button(button_frame, text="Close", command=self.on_closing).grid(row=5, column=1, sticky="w")
+
+        url = "https://github.com/hii-ragi/qfp-gui"
+        github_link = ttk.Frame(self)
+        github_style = ttk.Style()
+        github_style.configure("Link.TLabel", foreground="blue")
+        github_label = ttk.Label(github_link,text="Go to GitHub",style="Link.TLabel",cursor="hand2")
+        github_label.grid(row=0, column=0, sticky="w", padx=12, pady=(12,0))
+        github_label.bind("<Button-1>", lambda e: webbrowser.open(url))
+        github_link.grid(row=4, column=1, sticky="w")
+
 
     def choose_folder(self) -> None:
         """インデックス対象フォルダを選択します。"""
