@@ -42,11 +42,11 @@ class SettingsWindow(tk.Toplevel):
         """画面部品を組み立てます。"""
         self.columnconfigure(0, weight=1)
         
-        # Folder
+        # Target Folder
         FolderEntry = ttk.Frame(self)
         FolderEntry.grid(row=0, column=0, columnspan=5, sticky="ew", padx=12, pady=(12, 6))
         FolderEntry.columnconfigure(1, weight=1)
-        ttk.Label(FolderEntry, text="Folder", width=8).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 6))
+        ttk.Label(FolderEntry, text="Target Folder", width=12).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 6))
         ttk.Entry(FolderEntry, textvariable=self.folder_var).grid(row=0, column=1, columnspan=3, sticky="ew", padx=12, pady=(12, 6))
         ttk.Button(FolderEntry, text="Browse", command=self.choose_folder).grid(row=0, column=4, padx=(0, 12), pady=(12, 6))
 
@@ -54,7 +54,7 @@ class SettingsWindow(tk.Toplevel):
         DatabaseEntry = ttk.Frame(self)
         DatabaseEntry.grid(row=1, column=0, columnspan=5, sticky="ew", padx=12, pady=(12, 6))
         DatabaseEntry.columnconfigure(1, weight=1)
-        ttk.Label(DatabaseEntry, text="Database", width=8).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 6))
+        ttk.Label(DatabaseEntry, text="Database File", width=12).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 6))
         ttk.Entry(DatabaseEntry, textvariable=self.db_var).grid(row=0, column=1, columnspan=3, sticky="ew", padx=12, pady=(12, 6))
         ttk.Button(DatabaseEntry, text="Browse", command=self.choose_db).grid(row=0, column=4, padx=(0, 12), pady=(12, 6))
 
@@ -72,14 +72,16 @@ class SettingsWindow(tk.Toplevel):
             row=0, column=3, padx=(6, 0), sticky="w"
         )
 
-        # Button frame
+        ## Button frame
         button_frame = ttk.Frame(self)
         button_frame.grid(row=3, column=0, columnspan=5, sticky="ew", padx=12, pady=(0, 12))
         button_frame.columnconfigure(0, weight=1)
-
+        # start_index メソッドを呼び出すボタンを作成し、インデックス作成を開始します。
         ttk.Button(button_frame, text="Start Index", command=self.start_index).grid(row=4, column=0, sticky="w")
+        # Close ボタンを作成し、ウィンドウを閉じます。
         ttk.Button(button_frame, text="Close", command=self.on_closing).grid(row=5, column=1, sticky="w")
 
+        # GitHub link
         url = "https://github.com/hii-ragi/qfp-gui"
         github_link = ttk.Frame(self)
         github_style = ttk.Style()
