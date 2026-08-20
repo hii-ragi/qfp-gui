@@ -4,7 +4,7 @@ __pycache__/
 .codex/
 build/
 dist/
-*.spec
+.vscode/
 *.sqlite3
 *.db
 FLOWCHART.md
