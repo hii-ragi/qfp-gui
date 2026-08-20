@@ -6,9 +6,10 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
+from typing import Callable, cast
 
 from file_indexer.config import DEFAULT_DB, DEFAULT_WORKERS
-from file_indexer.indexing import index_folder
+from file_indexer.indexing import IndexStats, index_folder
 from file_indexer.search import search_files, show_stats
 
 import webbrowser
@@ -19,7 +20,7 @@ class SettingsWindow(tk.Toplevel):
 
     def __init__(self, parent: tk.Tk, folder_var: tk.StringVar, db_var: tk.StringVar, 
                  workers_var: tk.IntVar, max_text_bytes_var: tk.IntVar,
-                 on_index_start: callable) -> None:
+                 on_index_start: Callable[[], None]) -> None:
         super().__init__(parent)
         self.title("Index Settings")
         self.geometry("600x270")
@@ -133,6 +134,7 @@ class QfpApp(tk.Tk):
 
         self.message_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.index_thread: threading.Thread | None = None
+        self.cancel_event: threading.Event | None = None
         self.settings_window: SettingsWindow | None = None
 
         self.folder_var = tk.StringVar(value=str(Path.cwd()))
@@ -169,6 +171,8 @@ class QfpApp(tk.Tk):
         ttk.Label(progress_frame, textvariable=self.progress_text_var, width=28, anchor="e").grid(
             row=0, column=1, padx=(10, 0)
         )
+        self.cancel_button = ttk.Button(progress_frame, text="Cancel", command=self.cancel_index, state="disabled")
+        self.cancel_button.grid(row=0, column=2, padx=(10, 0))
 
         search_frame = ttk.LabelFrame(self, text="Search")
         search_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=8)
@@ -219,6 +223,8 @@ class QfpApp(tk.Tk):
         db_path = Path(self.db_var.get())
         workers = max(1, self.workers_var.get())
         max_text_bytes = max(0, self.max_text_bytes_var.get())
+        self.cancel_event = threading.Event()
+        self.cancel_button.configure(state="normal")
 
         # 設定ウィンドウのボタンを無効化
         if self.settings_window and self.settings_window.winfo_exists():
@@ -247,13 +253,25 @@ class QfpApp(tk.Tk):
                 log_enabled=True,
                 logger=lambda message: self.message_queue.put(("log", message)),
                 workers=workers,
+                cancel_event=self.cancel_event,
                 progress_callback=lambda current, total, label: self.message_queue.put(
                     ("progress", (current, total, label))
                 ),
             )
-            self.message_queue.put(("done", stats))
+            if self.cancel_event and self.cancel_event.is_set():
+                self.message_queue.put(("cancelled", stats))
+            else:
+                self.message_queue.put(("done", stats))
         except Exception as exc:
             self.message_queue.put(("error", exc))
+
+    def cancel_index(self) -> None:
+        """実行中のインデックス作成を停止要求します。"""
+        if self.index_thread and self.index_thread.is_alive() and self.cancel_event:
+            self.cancel_event.set()
+            self.cancel_button.configure(state="disabled")
+            self.status_var.set("Cancelling...")
+            self._append_output("Index cancellation requested.\n")
 
     def _poll_queue(self) -> None:
         """バックグラウンド処理から届いたメッセージを UI に反映します。"""
@@ -266,7 +284,7 @@ class QfpApp(tk.Tk):
             if kind == "log":
                 self._append_output(f"{payload}\n")
             elif kind == "progress":
-                current, total, label = payload
+                current, total, label = cast(tuple[int, int, str], payload)
                 maximum = max(total, 1)
                 remaining = max(total - current, 0)
                 self.progress.configure(maximum=maximum)
@@ -275,20 +293,32 @@ class QfpApp(tk.Tk):
                 self.status_var.set(f"Indexing... {current}/{total} {label}")
             elif kind == "done":
                 self.progress.configure(value=self.progress["maximum"])
+                self.cancel_button.configure(state="disabled")
                 # 設定ウィンドウのボタンを有効化
                 if self.settings_window and self.settings_window.winfo_exists():
                     self.settings_window.set_index_button_state("normal")
                 self.status_var.set("Index complete")
-                stats = payload
+                stats = cast(IndexStats, payload)
                 self.progress_text_var.set(f"{stats.scanned} / {stats.scanned}, remaining 0")
                 self._append_output(
                     "Index complete: "
                     f"scanned {stats.scanned}, stored {stats.stored}, "
                     f"skipped {stats.skipped}, failed {stats.failed}\n"
                 )
+            elif kind == "cancelled":
+                self.cancel_button.configure(state="disabled")
+                self.status_var.set("Index cancelled")
+                stats = cast(IndexStats, payload)
+                self.progress_text_var.set(f"{stats.scanned} / {self.progress['maximum']}, remaining 0")
+                self._append_output(
+                    "Index cancelled: "
+                    f"scanned {stats.scanned}, stored {stats.stored}, "
+                    f"skipped {stats.skipped}, failed {stats.failed}\n"
+                )
             elif kind == "error":
                 self.progress.configure(value=0)
                 self.progress_text_var.set("0 / 0, remaining 0")
+                self.cancel_button.configure(state="disabled")
                 # 設定ウィンドウのボタンを有効化
                 if self.settings_window and self.settings_window.winfo_exists():
                     self.settings_window.set_index_button_state("normal")

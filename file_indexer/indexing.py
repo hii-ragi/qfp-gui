@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Event
 from typing import Callable
 
 from file_indexer.config import DEFAULT_WORKERS
@@ -45,6 +46,7 @@ def index_folder(
     logger: Callable[[str], None] | None = None,
     workers: int = DEFAULT_WORKERS,
     progress_callback: Callable[[int, int, str], None] | None = None,
+    cancel_event: Event | None = None,
 ) -> IndexStats:
     """指定フォルダを探索して DB に登録します。
 
@@ -68,11 +70,13 @@ def index_folder(
         init_db(conn)
         if workers <= 1:
             _index_sequential(
-                conn, root, paths, max_text_bytes, stats, total, progress_callback, log_enabled, logger
+                conn, root, paths, max_text_bytes, stats, total, progress_callback, log_enabled, logger,
+                cancel_event,
             )
         else:
             _index_parallel(
-                conn, root, paths, max_text_bytes, stats, total, progress_callback, log_enabled, logger, workers
+                conn, root, paths, max_text_bytes, stats, total, progress_callback, log_enabled, logger, workers,
+                cancel_event,
             )
         conn.commit()
 
@@ -99,9 +103,12 @@ def _index_sequential(
     progress_callback: Callable[[int, int, str], None] | None,
     log_enabled: bool,
     logger: Callable[[str], None],
+    cancel_event: Event | None,
 ) -> None:
     """ワーカー数 1 のときの直列インデックス処理です。"""
     for path in paths:
+        if cancel_event and cancel_event.is_set():
+            break
         _store_prepared_path(
             conn, root, path, max_text_bytes, stats, total, progress_callback, log_enabled, logger
         )
@@ -118,14 +125,18 @@ def _index_parallel(
     log_enabled: bool,
     logger: Callable[[str], None],
     workers: int,
+    cancel_event: Event | None,
 ) -> None:
     """ファイルの読み込み・ハッシュ計算を並列化して、DB 保存は直列に行います。"""
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
-        futures = {
-            executor.submit(prepare_file, root, path, max_text_bytes): path
-            for path in paths
-        }
+    executor = ThreadPoolExecutor(max_workers=max(1, workers))
+    futures = {
+        executor.submit(prepare_file, root, path, max_text_bytes): path
+        for path in paths
+    }
+    try:
         for future in as_completed(futures):
+            if cancel_event and cancel_event.is_set():
+                break
             path = futures[future]
             try:
                 prepared = future.result()
@@ -142,6 +153,11 @@ def _index_parallel(
                     logger(f"読み取り失敗: {path} ({exc})")
             finally:
                 notify_progress(progress_callback, stats.scanned, total, path.name)
+    finally:
+        if cancel_event and cancel_event.is_set():
+            for future in futures:
+                future.cancel()
+        executor.shutdown(wait=True, cancel_futures=bool(cancel_event and cancel_event.is_set()))
 
 
 def _store_prepared_path(
