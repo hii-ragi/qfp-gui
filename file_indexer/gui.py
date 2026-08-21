@@ -23,6 +23,7 @@ class SettingsWindow(tk.Toplevel):
                  on_index_start: Callable[[], None],
                  on_cancel_index: Callable[[], None]) -> None:
         super().__init__(parent)
+        self.transient(parent)
         self.title("Index Settings")
         self.geometry("600x350")
         self.resizable(False, False)
@@ -38,6 +39,8 @@ class SettingsWindow(tk.Toplevel):
         self.progress_text_var = tk.StringVar(value="0 / 0, remaining 0")
         
         self._build_widgets()
+        self.grab_set()
+        self.focus_set()
         
         # ウィンドウが閉じられる時の処理
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -150,6 +153,7 @@ class SettingsWindow(tk.Toplevel):
 
     def on_closing(self) -> None:
         """ウィンドウを閉じます。"""
+        self.grab_release()
         self.destroy()
 
 
