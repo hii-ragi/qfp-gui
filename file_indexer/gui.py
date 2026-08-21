@@ -20,10 +20,11 @@ class SettingsWindow(tk.Toplevel):
 
     def __init__(self, parent: tk.Tk, folder_var: tk.StringVar, db_var: tk.StringVar, 
                  workers_var: tk.IntVar, max_text_bytes_var: tk.IntVar,
-                 on_index_start: Callable[[], None]) -> None:
+                 on_index_start: Callable[[], None],
+                 on_cancel_index: Callable[[], None]) -> None:
         super().__init__(parent)
         self.title("Index Settings")
-        self.geometry("600x270")
+        self.geometry("600x350")
         self.resizable(False, False)
         
         self.folder_var = folder_var
@@ -31,8 +32,10 @@ class SettingsWindow(tk.Toplevel):
         self.workers_var = workers_var
         self.max_text_bytes_var = max_text_bytes_var
         self.on_index_start = on_index_start
+        self.on_cancel_index = on_cancel_index
         self.parent = parent
         self.index_button: ttk.Button | None = None
+        self.progress_text_var = tk.StringVar(value="0 / 0, remaining 0")
         
         self._build_widgets()
         
@@ -73,12 +76,30 @@ class SettingsWindow(tk.Toplevel):
             row=0, column=3, padx=(6, 0), sticky="w"
         )
 
+        # Progressbar
+        progress_frame = ttk.LabelFrame(self, text="Index")
+        progress_frame.grid(row=3, column=0, columnspan=5, sticky="nsew", padx=12, pady=8)
+        progress_frame.columnconfigure(0, weight=1)
+        progress_frame.rowconfigure(1, weight=1)
+
+        progress_control = ttk.Frame(progress_frame)
+        progress_control.grid(row=0, column=0, sticky="ew", padx=12, pady=(0, 8))
+        progress_control.columnconfigure(0, weight=1)
+        self.progress = ttk.Progressbar(progress_control, mode="determinate", maximum=100, value=0)
+        self.progress.grid(row=0, column=0, columnspan=3, sticky="ew", padx=12, pady=8)
+        ttk.Label(progress_control, textvariable=self.progress_text_var, width=28, anchor="e").grid(row=1, column=0, padx=(10, 0))
+        # start_index メソッドを呼び出すボタンを作成し、インデックス作成を開始します。
+        self.index_button = ttk.Button(progress_control, text="Start Index", command=self.start_index)
+        self.index_button.grid(row=1, column=1, sticky="w")
+        # Cancel ボタンを作成し、インデックス作成をキャンセルします。
+        self.cancel_button = ttk.Button(progress_control, text="Cancel", command=self.on_cancel_index, state="disabled")
+        self.cancel_button.grid(row=1, column=2, padx=(10, 0))
+        
+
         ## Button frame
         button_frame = ttk.Frame(self)
-        button_frame.grid(row=3, column=0, columnspan=5, sticky="ew", padx=12, pady=(0, 12))
+        button_frame.grid(row=4, column=0, columnspan=5, sticky="ew", padx=12, pady=(0, 12))
         button_frame.columnconfigure(0, weight=1)
-        # start_index メソッドを呼び出すボタンを作成し、インデックス作成を開始します。
-        ttk.Button(button_frame, text="Start Index", command=self.start_index).grid(row=4, column=0, sticky="w")
         # Close ボタンを作成し、ウィンドウを閉じます。
         ttk.Button(button_frame, text="Close", command=self.on_closing).grid(row=5, column=1, sticky="w")
 
@@ -90,7 +111,7 @@ class SettingsWindow(tk.Toplevel):
         github_label = ttk.Label(github_link,text="Go to GitHub",style="Link.TLabel",cursor="hand2")
         github_label.grid(row=0, column=0, sticky="w", padx=12, pady=(12,0))
         github_label.bind("<Button-1>", lambda e: webbrowser.open(url))
-        github_link.grid(row=4, column=1, sticky="w")
+        github_link.grid(row=5, column=1, sticky="w")
 
 
     def choose_folder(self) -> None:
@@ -118,6 +139,15 @@ class SettingsWindow(tk.Toplevel):
         if self.index_button:
             self.index_button.configure(state=state)
 
+    def set_progress(self, maximum: int, value: int, text: str) -> None:
+        """進捗表示を更新します。"""
+        self.progress.configure(maximum=maximum, value=value)
+        self.progress_text_var.set(text)
+
+    def set_cancel_button_state(self, state: str) -> None:
+        """Cancel ボタンの状態を設定します。"""
+        self.cancel_button.configure(state=state)
+
     def on_closing(self) -> None:
         """ウィンドウを閉じます。"""
         self.destroy()
@@ -144,7 +174,6 @@ class QfpApp(tk.Tk):
         self.query_var = tk.StringVar()
         self.limit_var = tk.IntVar(value=20)
         self.status_var = tk.StringVar(value="Ready")
-        self.progress_text_var = tk.StringVar(value="0 / 0, remaining 0")
 
         self._build_widgets()
         self._poll_queue()
@@ -152,7 +181,7 @@ class QfpApp(tk.Tk):
     def _build_widgets(self) -> None:
         """画面部品を組み立てます。"""
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(2, weight=1)
+        self.rowconfigure(1, weight=1)
 
         # ツールバーフレーム
         toolbar_frame = ttk.Frame(self)
@@ -162,20 +191,8 @@ class QfpApp(tk.Tk):
         ttk.Button(toolbar_frame, text="Index Settings", command=self.open_settings).pack(side="left", padx=(0, 8))
         ttk.Button(toolbar_frame, text="Show Stats", command=self.show_stats).pack(side="left")
 
-        progress_frame = ttk.Frame(self)
-        progress_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
-        progress_frame.columnconfigure(0, weight=1)
-
-        self.progress = ttk.Progressbar(progress_frame, mode="determinate", maximum=100, value=0)
-        self.progress.grid(row=0, column=0, sticky="ew")
-        ttk.Label(progress_frame, textvariable=self.progress_text_var, width=28, anchor="e").grid(
-            row=0, column=1, padx=(10, 0)
-        )
-        self.cancel_button = ttk.Button(progress_frame, text="Cancel", command=self.cancel_index, state="disabled")
-        self.cancel_button.grid(row=0, column=2, padx=(10, 0))
-
         search_frame = ttk.LabelFrame(self, text="Search")
-        search_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=8)
+        search_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=8)
         search_frame.columnconfigure(0, weight=1)
         search_frame.rowconfigure(1, weight=1)
 
@@ -196,7 +213,7 @@ class QfpApp(tk.Tk):
         self.output.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
         status = ttk.Label(self, textvariable=self.status_var, anchor="w")
-        status.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 10))
+        status.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 10))
 
     def open_settings(self) -> None:
         """設定ウィンドウを開きます。既に開いている場合は前面に表示します。"""
@@ -210,7 +227,8 @@ class QfpApp(tk.Tk):
                 self.db_var, 
                 self.workers_var, 
                 self.max_text_bytes_var,
-                self.start_index
+                self.start_index,
+                self.cancel_index,
             )
 
     def start_index(self) -> None:
@@ -224,14 +242,15 @@ class QfpApp(tk.Tk):
         workers = max(1, self.workers_var.get())
         max_text_bytes = max(0, self.max_text_bytes_var.get())
         self.cancel_event = threading.Event()
-        self.cancel_button.configure(state="normal")
+        if self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.set_cancel_button_state("normal")
 
         # 設定ウィンドウのボタンを無効化
         if self.settings_window and self.settings_window.winfo_exists():
             self.settings_window.set_index_button_state("disabled")
         
-        self.progress.configure(maximum=100, value=0)
-        self.progress_text_var.set("0 / 0, remaining 0")
+        if self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.set_progress(100, 0, "0 / 0, remaining 0")
         self.status_var.set("Indexing...")
         self._append_output("Index started.\n")
 
@@ -269,7 +288,8 @@ class QfpApp(tk.Tk):
         """実行中のインデックス作成を停止要求します。"""
         if self.index_thread and self.index_thread.is_alive() and self.cancel_event:
             self.cancel_event.set()
-            self.cancel_button.configure(state="disabled")
+            if self.settings_window and self.settings_window.winfo_exists():
+                self.settings_window.set_cancel_button_state("disabled")
             self.status_var.set("Cancelling...")
             self._append_output("Index cancellation requested.\n")
 
@@ -287,38 +307,50 @@ class QfpApp(tk.Tk):
                 current, total, label = cast(tuple[int, int, str], payload)
                 maximum = max(total, 1)
                 remaining = max(total - current, 0)
-                self.progress.configure(maximum=maximum)
-                self.progress.configure(value=current)
-                self.progress_text_var.set(f"{current} / {total}, remaining {remaining}")
+                if self.settings_window and self.settings_window.winfo_exists():
+                    self.settings_window.set_progress(
+                        maximum, current, f"{current} / {total}, remaining {remaining}"
+                    )
                 self.status_var.set(f"Indexing... {current}/{total} {label}")
             elif kind == "done":
-                self.progress.configure(value=self.progress["maximum"])
-                self.cancel_button.configure(state="disabled")
+                stats = cast(IndexStats, payload)
+                if self.settings_window and self.settings_window.winfo_exists():
+                    self.settings_window.set_progress(
+                        int(self.settings_window.progress["maximum"]),
+                        int(self.settings_window.progress["maximum"]),
+                        f"{stats.scanned} / {stats.scanned}, remaining 0",
+                    )
+                    self.settings_window.set_cancel_button_state("disabled")
                 # 設定ウィンドウのボタンを有効化
                 if self.settings_window and self.settings_window.winfo_exists():
                     self.settings_window.set_index_button_state("normal")
                 self.status_var.set("Index complete")
-                stats = cast(IndexStats, payload)
-                self.progress_text_var.set(f"{stats.scanned} / {stats.scanned}, remaining 0")
                 self._append_output(
                     "Index complete: "
                     f"scanned {stats.scanned}, stored {stats.stored}, "
                     f"skipped {stats.skipped}, failed {stats.failed}\n"
                 )
             elif kind == "cancelled":
-                self.cancel_button.configure(state="disabled")
+                if self.settings_window and self.settings_window.winfo_exists():
+                    self.settings_window.set_cancel_button_state("disabled")
+                    self.settings_window.set_index_button_state("normal")
                 self.status_var.set("Index cancelled")
                 stats = cast(IndexStats, payload)
-                self.progress_text_var.set(f"{stats.scanned} / {self.progress['maximum']}, remaining 0")
+                if self.settings_window and self.settings_window.winfo_exists():
+                    self.settings_window.set_progress(
+                        int(self.settings_window.progress["maximum"]),
+                        stats.scanned,
+                        f"{stats.scanned} / {self.settings_window.progress['maximum']}, remaining 0",
+                    )
                 self._append_output(
                     "Index cancelled: "
                     f"scanned {stats.scanned}, stored {stats.stored}, "
                     f"skipped {stats.skipped}, failed {stats.failed}\n"
                 )
             elif kind == "error":
-                self.progress.configure(value=0)
-                self.progress_text_var.set("0 / 0, remaining 0")
-                self.cancel_button.configure(state="disabled")
+                if self.settings_window and self.settings_window.winfo_exists():
+                    self.settings_window.set_progress(100, 0, "0 / 0, remaining 0")
+                    self.settings_window.set_cancel_button_state("disabled")
                 # 設定ウィンドウのボタンを有効化
                 if self.settings_window and self.settings_window.winfo_exists():
                     self.settings_window.set_index_button_state("normal")
