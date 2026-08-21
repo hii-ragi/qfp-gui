@@ -117,11 +117,26 @@ class SettingsWindow(tk.Toplevel):
         github_link.grid(row=5, column=1, sticky="w")
 
 
+    @staticmethod
+    def _normalize_path(raw_value: str) -> Path:
+        """入力文字列を OS 標準の絶対パスへ正規化します。"""
+        value = raw_value.strip()
+        if not value:
+            return Path.cwd().resolve()
+        return Path(value).expanduser().resolve(strict=False)
+
     def choose_folder(self) -> None:
         """インデックス対象フォルダを選択します。"""
         folder = filedialog.askdirectory(initialdir=self.folder_var.get() or str(Path.cwd()))
-        if folder:
-            self.folder_var.set(folder)
+        if not folder:
+            return
+
+        folder_path = self._normalize_path(folder)
+        if folder_path.exists() and folder_path.is_file():
+            messagebox.showerror("QFP", f"Select a folder, not a file:\n{folder_path}")
+            return
+
+        self.folder_var.set(str(folder_path))
 
     def choose_db(self) -> None:
         """SQLite DB ファイルを選択します。存在しないパスも指定できます。"""
@@ -131,7 +146,8 @@ class SettingsWindow(tk.Toplevel):
             filetypes=[("SQLite database", "*.sqlite3 *.db"), ("All files", "*.*")],
         )
         if db_path:
-            self.db_var.set(db_path)
+            resolved = self._normalize_path(db_path)
+            self.db_var.set(str(resolved))
 
     def start_index(self) -> None:
         """インデックス作成を開始します。"""
@@ -241,8 +257,24 @@ class QfpApp(tk.Tk):
             messagebox.showinfo("QFP", "Indexing is already running.")
             return
 
-        folder = Path(self.folder_var.get())
-        db_path = Path(self.db_var.get())
+        folder_raw = self.folder_var.get()
+        db_raw = self.db_var.get()
+
+        folder = SettingsWindow._normalize_path(folder_raw)
+        db_path = SettingsWindow._normalize_path(db_raw)
+
+        if not folder.exists() or not folder.is_dir():
+            messagebox.showerror("QFP", f"Invalid folder path:\n{folder}")
+            self.folder_var.set(str(folder))
+            return
+        if db_path.exists() and db_path.is_dir():
+            messagebox.showerror("QFP", f"Database path must be a file, not a folder:\n{db_path}")
+            self.db_var.set(str(db_path))
+            return
+
+        self.folder_var.set(str(folder))
+        self.db_var.set(str(db_path))
+
         workers = max(1, self.workers_var.get())
         max_text_bytes = max(0, self.max_text_bytes_var.get())
         self.cancel_event = threading.Event()

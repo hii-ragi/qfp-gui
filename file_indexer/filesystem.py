@@ -70,3 +70,26 @@ def file_hash(path: Path) -> str:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def read_and_hash(path: Path, read_content: bool) -> tuple[str, str]:
+    """ファイルを一度だけ読み、SHA-256と必要な本文を返します。"""
+    digest = hashlib.sha256()
+    content_bytes = bytearray() if read_content else None
+
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+            if content_bytes is not None:
+                content_bytes.extend(chunk)
+
+    if content_bytes is None:
+        return digest.hexdigest(), ""
+
+    raw = bytes(content_bytes)
+    for encoding in ("utf-8-sig", "utf-8", "cp932"):
+        try:
+            return digest.hexdigest(), raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return digest.hexdigest(), raw.decode("utf-8", errors="replace")

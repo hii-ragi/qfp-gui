@@ -11,7 +11,7 @@ from typing import Callable
 
 from file_indexer.config import DEFAULT_WORKERS
 from file_indexer.db import connect, init_db, upsert_file_record
-from file_indexer.filesystem import file_hash, iter_files, read_text, should_read_text
+from file_indexer.filesystem import iter_files, read_and_hash, should_read_text
 
 
 @dataclass
@@ -63,11 +63,14 @@ def index_folder(
     if log_enabled:
         logger("ファイル一覧を作成しています...")
     paths = list(iter_files(root, excluded_paths))
-    total = len(paths)
 
     stats = IndexStats()
     with connect(db_path) as conn:
         init_db(conn)
+        paths, skipped_count = _filter_unchanged_paths(conn, paths)
+        stats.skipped = skipped_count
+        stats.scanned = skipped_count
+        total = len(paths) + skipped_count
         if workers <= 1:
             _index_sequential(
                 conn, root, paths, max_text_bytes, stats, total, progress_callback, log_enabled, logger,
@@ -91,6 +94,35 @@ def build_excluded_paths(db_path: Path) -> set[Path]:
         Path(str(resolved_db_path) + "-wal"),
         Path(str(resolved_db_path) + "-shm"),
     }
+
+
+def _filter_unchanged_paths(conn, paths: list[Path]) -> tuple[list[Path], int]:
+    """DB に既に同じサイズと更新時刻があればハッシュ計算をスキップします。"""
+    filtered: list[Path] = []
+    skipped = 0
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+
+        absolute_path = path.resolve()
+        row = conn.execute(
+            "SELECT size, modified_at FROM files WHERE path = ?",
+            (str(absolute_path),),
+        ).fetchone()
+        if row is None:
+            filtered.append(path)
+            continue
+
+        current_modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+        if row["size"] == stat.st_size and row["modified_at"] == current_modified:
+            skipped += 1
+            continue
+
+        filtered.append(path)
+
+    return filtered, skipped
 
 
 def _index_sequential(
@@ -210,7 +242,7 @@ def prepare_file(root: Path, path: Path, max_text_bytes: int) -> PreparedFile | 
     modified_at = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
     indexed_at = datetime.now(timezone.utc).isoformat()
     mime_type, _ = mimetypes.guess_type(str(path))
-    content = read_text(path) if should_read_text(path, max_text_bytes) else ""
+    sha256, content = read_and_hash(path, should_read_text(path, max_text_bytes))
 
     return PreparedFile(
         root=root,
@@ -221,7 +253,7 @@ def prepare_file(root: Path, path: Path, max_text_bytes: int) -> PreparedFile | 
         size=stat.st_size,
         modified_at=modified_at,
         mime_type=mime_type,
-        sha256=file_hash(path),
+        sha256=sha256,
         content=content,
         indexed_at=indexed_at,
     )
