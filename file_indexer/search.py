@@ -8,7 +8,8 @@ from file_indexer.db import connect, init_db
 
 def search_files(db_path: Path, query: str, limit: int) -> list[sqlite3.Row]:
     """FTS5 を優先し、使えない検索語や環境では LIKE 検索に切り替えます。"""
-    with connect(db_path) as conn:
+    conn = connect(db_path)
+    try:
         fts_enabled = init_db(conn)
         if fts_enabled:
             try:
@@ -19,6 +20,8 @@ def search_files(db_path: Path, query: str, limit: int) -> list[sqlite3.Row]:
                 pass
 
         return search_files_like(conn, query, limit)
+    finally:
+        conn.close()
 
 
 def search_files_fts(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
@@ -57,7 +60,8 @@ def search_files_like(conn: sqlite3.Connection, query: str, limit: int) -> list[
 
 def show_stats(db_path: Path) -> sqlite3.Row:
     """登録済みファイル数などの概要を返します。"""
-    with connect(db_path) as conn:
+    conn = connect(db_path)
+    try:
         init_db(conn)
         return conn.execute(
             """
@@ -67,3 +71,5 @@ def show_stats(db_path: Path) -> sqlite3.Row:
             FROM files
             """
         ).fetchone()
+    finally:
+        conn.close()

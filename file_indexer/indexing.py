@@ -9,8 +9,8 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
-from file_indexer.config import DEFAULT_WORKERS
-from file_indexer.db import connect, init_db, upsert_file_record
+from file_indexer.config import DEFAULT_BATCH_SIZE, DEFAULT_WORKERS
+from file_indexer.db import connect, init_db, upsert_file_records
 from file_indexer.filesystem import iter_files, read_and_hash, should_read_text
 
 
@@ -45,12 +45,14 @@ def index_folder(
     log_enabled: bool = True,
     logger: Callable[[str], None] | None = None,
     workers: int = DEFAULT_WORKERS,
+    batch_size: int = DEFAULT_BATCH_SIZE,
     progress_callback: Callable[[int, int, str], None] | None = None,
     cancel_event: Event | None = None,
 ) -> IndexStats:
     """指定フォルダを探索して DB に登録します。
 
-    ファイル読み込みやハッシュ計算は並列化し、SQLite への書き込みは直列にします。
+    workers は本文読み込みとハッシュ計算に使うワーカー数です。
+    SQLite への書き込みは直列にします。
     workers=1 を指定すると並列化せずに処理します。
     """
     root = folder.resolve()
@@ -58,6 +60,7 @@ def index_folder(
         raise ValueError(f"フォルダが見つかりません: {folder}")
 
     logger = logger or (lambda message: print(message, file=sys.stderr))
+    batch_size = max(1, batch_size)
     excluded_paths = build_excluded_paths(db_path)
 
     if log_enabled:
@@ -65,7 +68,8 @@ def index_folder(
     paths = list(iter_files(root, excluded_paths))
 
     stats = IndexStats()
-    with connect(db_path) as conn:
+    conn = connect(db_path)
+    try:
         init_db(conn)
         paths, skipped_count = _filter_unchanged_paths(conn, paths)
         stats.skipped = skipped_count
@@ -74,14 +78,16 @@ def index_folder(
         if workers <= 1:
             _index_sequential(
                 conn, root, paths, max_text_bytes, stats, total, progress_callback, log_enabled, logger,
-                cancel_event,
+                cancel_event, batch_size,
             )
         else:
             _index_parallel(
                 conn, root, paths, max_text_bytes, stats, total, progress_callback, log_enabled, logger, workers,
-                cancel_event,
+                cancel_event, batch_size,
             )
         conn.commit()
+    finally:
+        conn.close()
 
     return stats
 
@@ -100,6 +106,11 @@ def _filter_unchanged_paths(conn, paths: list[Path]) -> tuple[list[Path], int]:
     """DB に既に同じサイズと更新時刻があればハッシュ計算をスキップします。"""
     filtered: list[Path] = []
     skipped = 0
+    existing_files = {
+        row["path"]: (row["size"], row["modified_at"])
+        for row in conn.execute("SELECT path, size, modified_at FROM files")
+    }
+
     for path in paths:
         try:
             stat = path.stat()
@@ -107,16 +118,13 @@ def _filter_unchanged_paths(conn, paths: list[Path]) -> tuple[list[Path], int]:
             continue
 
         absolute_path = path.resolve()
-        row = conn.execute(
-            "SELECT size, modified_at FROM files WHERE path = ?",
-            (str(absolute_path),),
-        ).fetchone()
-        if row is None:
+        existing = existing_files.get(str(absolute_path))
+        if existing is None:
             filtered.append(path)
             continue
 
         current_modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
-        if row["size"] == stat.st_size and row["modified_at"] == current_modified:
+        if existing == (stat.st_size, current_modified):
             skipped += 1
             continue
 
@@ -136,14 +144,33 @@ def _index_sequential(
     log_enabled: bool,
     logger: Callable[[str], None],
     cancel_event: Event | None,
+    batch_size: int,
 ) -> None:
     """ワーカー数 1 のときの直列インデックス処理です。"""
+    pending: list[PreparedFile] = []
     for path in paths:
         if cancel_event and cancel_event.is_set():
             break
-        _store_prepared_path(
-            conn, root, path, max_text_bytes, stats, total, progress_callback, log_enabled, logger
-        )
+        try:
+            prepared = prepare_file(root, path, max_text_bytes)
+            stats.scanned += 1
+            if prepared is None:
+                stats.skipped += 1
+            else:
+                pending.append(prepared)
+                stats.stored += 1
+        except OSError as exc:
+            stats.scanned += 1
+            stats.failed += 1
+            if log_enabled:
+                logger(f"読み取り失敗: {path} ({exc})")
+        finally:
+            if len(pending) >= batch_size:
+                _flush_prepared_files(conn, pending)
+                pending.clear()
+            notify_progress(progress_callback, stats.scanned, total, path.name)
+
+    _flush_prepared_files(conn, pending)
 
 
 def _index_parallel(
@@ -158,8 +185,10 @@ def _index_parallel(
     logger: Callable[[str], None],
     workers: int,
     cancel_event: Event | None,
+    batch_size: int,
 ) -> None:
     """ファイルの読み込み・ハッシュ計算を並列化して、DB 保存は直列に行います。"""
+    pending: list[PreparedFile] = []
     executor = ThreadPoolExecutor(max_workers=max(1, workers))
     futures = {
         executor.submit(prepare_file, root, path, max_text_bytes): path
@@ -176,7 +205,7 @@ def _index_parallel(
                 if prepared is None:
                     stats.skipped += 1
                 else:
-                    store_prepared_file(conn, prepared)
+                    pending.append(prepared)
                     stats.stored += 1
             except OSError as exc:
                 stats.scanned += 1
@@ -184,41 +213,16 @@ def _index_parallel(
                 if log_enabled:
                     logger(f"読み取り失敗: {path} ({exc})")
             finally:
+                if len(pending) >= batch_size:
+                    _flush_prepared_files(conn, pending)
+                    pending.clear()
                 notify_progress(progress_callback, stats.scanned, total, path.name)
     finally:
         if cancel_event and cancel_event.is_set():
             for future in futures:
                 future.cancel()
         executor.shutdown(wait=True, cancel_futures=bool(cancel_event and cancel_event.is_set()))
-
-
-def _store_prepared_path(
-    conn,
-    root: Path,
-    path: Path,
-    max_text_bytes: int,
-    stats: IndexStats,
-    total: int,
-    progress_callback: Callable[[int, int, str], None] | None,
-    log_enabled: bool,
-    logger: Callable[[str], None],
-) -> None:
-    """直列処理用に、1 パスを準備して保存します。"""
-    try:
-        prepared = prepare_file(root, path, max_text_bytes)
-        stats.scanned += 1
-        if prepared is None:
-            stats.skipped += 1
-        else:
-            store_prepared_file(conn, prepared)
-            stats.stored += 1
-    except OSError as exc:
-        stats.scanned += 1
-        stats.failed += 1
-        if log_enabled:
-            logger(f"読み取り失敗: {path} ({exc})")
-    finally:
-        notify_progress(progress_callback, stats.scanned, total, path.name)
+    _flush_prepared_files(conn, pending)
 
 
 def notify_progress(
@@ -259,19 +263,22 @@ def prepare_file(root: Path, path: Path, max_text_bytes: int) -> PreparedFile | 
     )
 
 
-def store_prepared_file(conn, prepared: PreparedFile) -> None:
-    """準備済みのファイル情報を DB 層へ渡します。"""
-    upsert_file_record(
-        conn=conn,
-        root=prepared.root,
-        absolute_path=prepared.absolute_path,
-        relative_path=prepared.relative_path,
-        name=prepared.name,
-        extension=prepared.extension,
-        size=prepared.size,
-        modified_at=prepared.modified_at,
-        mime_type=prepared.mime_type,
-        sha256=prepared.sha256,
-        content=prepared.content,
-        indexed_at=prepared.indexed_at,
-    )
+def _flush_prepared_files(conn, prepared_files: list[PreparedFile]) -> None:
+    """準備済みファイルをまとめてDBへ保存します。"""
+    records = [
+        {
+            "root": str(prepared.root),
+            "path": str(prepared.absolute_path),
+            "relative_path": prepared.relative_path,
+            "name": prepared.name,
+            "extension": prepared.extension,
+            "size": prepared.size,
+            "modified_at": prepared.modified_at,
+            "mime_type": prepared.mime_type,
+            "sha256": prepared.sha256,
+            "content": prepared.content,
+            "indexed_at": prepared.indexed_at,
+        }
+        for prepared in prepared_files
+    ]
+    upsert_file_records(conn, records)

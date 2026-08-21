@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import Callable, cast
 
-from file_indexer.config import DEFAULT_DB, DEFAULT_WORKERS
+from file_indexer.config import DEFAULT_BATCH_SIZE, DEFAULT_DB, DEFAULT_WORKERS
 from file_indexer.indexing import IndexStats, index_folder
 from file_indexer.search import search_files, show_stats
 
@@ -19,7 +19,7 @@ class SettingsWindow(tk.Toplevel):
     """設定ウィンドウを表示するクラスです。"""
 
     def __init__(self, parent: tk.Tk, folder_var: tk.StringVar, db_var: tk.StringVar, 
-                 workers_var: tk.IntVar, max_text_bytes_var: tk.IntVar,
+                 workers_var: tk.IntVar, batch_size_var: tk.IntVar, max_text_bytes_var: tk.IntVar,
                  on_index_start: Callable[[], None],
                  on_cancel_index: Callable[[], None]) -> None:
         super().__init__(parent)
@@ -31,6 +31,7 @@ class SettingsWindow(tk.Toplevel):
         self.folder_var = folder_var
         self.db_var = db_var
         self.workers_var = workers_var
+        self.batch_size_var = batch_size_var
         self.max_text_bytes_var = max_text_bytes_var
         self.on_index_start = on_index_start
         self.on_cancel_index = on_cancel_index
@@ -65,19 +66,20 @@ class SettingsWindow(tk.Toplevel):
         ttk.Entry(DatabaseEntry, textvariable=self.db_var).grid(row=0, column=1, columnspan=3, sticky="ew", padx=12, pady=(12, 6))
         ttk.Button(DatabaseEntry, text="Browse", command=self.choose_db).grid(row=0, column=4, padx=(0, 12), pady=(12, 6))
 
-        # Workers and Max text bytes
+        # Hash workers and Max text bytes
         options_frame = ttk.Frame(self)
         options_frame.grid(row=2, column=0, columnspan=5, sticky="ew", padx=12, pady=12)
         options_frame.columnconfigure(1, weight=0)
         options_frame.columnconfigure(3, weight=1)
         
-        ttk.Label(options_frame, text="Workers", width=8).grid(row=0, column=0, sticky="w")
+        ttk.Label(options_frame, text="Hash workers", width=12).grid(row=0, column=0, sticky="w")
         ttk.Spinbox(options_frame, from_=1, to=32, width=6, textvariable=self.workers_var).grid(row=0, column=1, padx=(6, 18))
+
+        ttk.Label(options_frame, text="Batch size", width=10).grid(row=0, column=2, sticky="w")
+        ttk.Spinbox(options_frame, from_=1, to=10000, width=8, textvariable=self.batch_size_var).grid(row=0, column=3, padx=(6, 18), sticky="w")
         
-        ttk.Label(options_frame, text="Max text bytes", width=12).grid(row=0, column=2, sticky="w")
-        ttk.Spinbox(options_frame, from_=1024, to=100 * 1024 * 1024, increment=1024, width=12, textvariable=self.max_text_bytes_var).grid(
-            row=0, column=3, padx=(6, 0), sticky="w"
-        )
+        ttk.Label(options_frame, text="Max text bytes", width=12).grid(row=0, column=4, sticky="w")
+        ttk.Spinbox(options_frame, from_=1024, to=100 * 1024 * 1024, increment=1024, width=12, textvariable=self.max_text_bytes_var).grid(row=0, column=5, padx=(6, 18), sticky="w")
 
         # Progressbar
         progress_frame = ttk.LabelFrame(self, text="Index")
@@ -190,6 +192,7 @@ class QfpApp(tk.Tk):
         self.folder_var = tk.StringVar(value=str(Path.cwd()))
         self.db_var = tk.StringVar(value=str((Path.cwd() / DEFAULT_DB).resolve()))
         self.workers_var = tk.IntVar(value=DEFAULT_WORKERS)
+        self.batch_size_var = tk.IntVar(value=DEFAULT_BATCH_SIZE)
         self.max_text_bytes_var = tk.IntVar(value=1024 * 1024)
         self.query_var = tk.StringVar()
         self.limit_var = tk.IntVar(value=20)
@@ -246,6 +249,7 @@ class QfpApp(tk.Tk):
                 self.folder_var, 
                 self.db_var, 
                 self.workers_var, 
+                self.batch_size_var,
                 self.max_text_bytes_var,
                 self.start_index,
                 self.cancel_index,
@@ -276,6 +280,7 @@ class QfpApp(tk.Tk):
         self.db_var.set(str(db_path))
 
         workers = max(1, self.workers_var.get())
+        batch_size = max(1, self.batch_size_var.get())
         max_text_bytes = max(0, self.max_text_bytes_var.get())
         self.cancel_event = threading.Event()
         if self.settings_window and self.settings_window.winfo_exists():
@@ -292,12 +297,12 @@ class QfpApp(tk.Tk):
 
         self.index_thread = threading.Thread(
             target=self._index_worker,
-            args=(db_path, folder, max_text_bytes, workers),
+            args=(db_path, folder, max_text_bytes, workers, batch_size),
             daemon=True,
         )
         self.index_thread.start()
 
-    def _index_worker(self, db_path: Path, folder: Path, max_text_bytes: int, workers: int) -> None:
+    def _index_worker(self, db_path: Path, folder: Path, max_text_bytes: int, workers: int, batch_size: int) -> None:
         """GUI を固めないように別スレッドでインデックス処理を行います。"""
         try:
             stats = index_folder(
@@ -308,6 +313,7 @@ class QfpApp(tk.Tk):
                 log_enabled=True,
                 logger=lambda message: self.message_queue.put(("log", message)),
                 workers=workers,
+                batch_size=batch_size,
                 cancel_event=self.cancel_event,
                 progress_callback=lambda current, total, label: self.message_queue.put(
                     ("progress", (current, total, label))

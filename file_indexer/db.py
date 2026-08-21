@@ -126,6 +126,57 @@ def upsert_file_record(
     upsert_fts_record(conn, row_id, name, relative_path, content)
 
 
+def upsert_file_records(conn: sqlite3.Connection, records: list[dict[str, object]]) -> None:
+    """複数ファイルのメタデータとFTS情報をまとめて登録します。"""
+    if not records:
+        return
+
+    conn.executemany(
+        """
+        INSERT INTO files (
+            root, path, relative_path, name, extension, size, modified_at,
+            mime_type, sha256, content, indexed_at
+        )
+        VALUES (:root, :path, :relative_path, :name, :extension, :size, :modified_at,
+                :mime_type, :sha256, :content, :indexed_at)
+        ON CONFLICT(path) DO UPDATE SET
+            root = excluded.root,
+            relative_path = excluded.relative_path,
+            name = excluded.name,
+            extension = excluded.extension,
+            size = excluded.size,
+            modified_at = excluded.modified_at,
+            mime_type = excluded.mime_type,
+            sha256 = excluded.sha256,
+            content = excluded.content,
+            indexed_at = excluded.indexed_at
+        """,
+        records,
+    )
+
+    paths = [record["path"] for record in records]
+    placeholders = ", ".join("?" for _ in paths)
+    rows = conn.execute(
+        f"SELECT id, path FROM files WHERE path IN ({placeholders})", paths
+    ).fetchall()
+    ids_by_path = {row["path"]: row["id"] for row in rows}
+
+    try:
+        conn.executemany(
+            "DELETE FROM files_fts WHERE file_id = ?",
+            [(ids_by_path[record["path"]],) for record in records],
+        )
+        conn.executemany(
+            "INSERT INTO files_fts(file_id, name, relative_path, content) VALUES (?, ?, ?, ?)",
+            [
+                (ids_by_path[record["path"]], record["name"], record["relative_path"], record["content"])
+                for record in records
+            ],
+        )
+    except sqlite3.OperationalError:
+        pass
+
+
 def upsert_fts_record(
     conn: sqlite3.Connection, row_id: int, name: str, relative_path: str, content: str
 ) -> None:

@@ -5,6 +5,7 @@ __pycache__/
 build/
 dist/
 .vscode/
+test/
 *.sqlite3
 *.db
 FLOWCHART.md

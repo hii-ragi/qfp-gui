@@ -34,7 +34,7 @@ python qfp-gui.py
 引数なしで起動するとGUIが開きます。
 
 1. `Index Settings` で対象フォルダとSQLite DBの保存先を指定します。
-2. 必要に応じて `Workers` と `Max text bytes` を設定します。
+2. 必要に応じて `Hash workers`、`Batch size`、`Max text bytes` を設定します。
 3. `Start Index` を押してインデックスを作成します。
 4. 検索欄に検索語を入力し、`Search` を押します。Enterキーでも検索できます。
 5. `Stats` または上部の `Show Stats` でDBの統計を表示します。
@@ -50,7 +50,7 @@ python qfp-gui.py index C:\path\to\folder
 DBの保存先は既定でカレントフォルダの `index.sqlite3` です。保存先、本文読み込み上限、ワーカー数は変更できます。
 
 ```powershell
-python qfp-gui.py --db C:\path\to\my-index.sqlite3 index C:\path\to\folder --max-text-bytes 2097152 --workers 4
+python qfp-gui.py --db C:\path\to\my-index.sqlite3 index C:\path\to\folder --max-text-bytes 2097152 --workers 4 --batch-size 50
 ```
 
 ログを表示しない場合は `--quiet` を指定します。

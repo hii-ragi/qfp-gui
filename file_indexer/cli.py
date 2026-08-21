@@ -5,7 +5,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from file_indexer.config import DEFAULT_DB, DEFAULT_WORKERS
+from file_indexer.config import DEFAULT_BATCH_SIZE, DEFAULT_DB, DEFAULT_WORKERS
 from file_indexer.indexing import index_folder
 from file_indexer.search import search_files, show_stats
 
@@ -29,9 +29,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     index_parser.add_argument(
         "--workers",
+        "--hash-workers",
+        dest="workers",
         type=int,
         default=DEFAULT_WORKERS,
-        help=f"読み込み・ハッシュ計算に使う並列ワーカー数。1 で並列化なし。既定: {DEFAULT_WORKERS}",
+        help=f"本文読み込み・ハッシュ計算に使う並列ワーカー数。1 で並列化なし。既定: {DEFAULT_WORKERS}",
+    )
+    index_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=DEFAULT_BATCH_SIZE,
+        help=f"DBへ一括保存するファイル数。既定: {DEFAULT_BATCH_SIZE}",
     )
     index_parser.add_argument("--quiet", action="store_true", help="ログメッセージを表示しません。")
 
@@ -81,6 +89,7 @@ def run_index(args: argparse.Namespace, db_path: Path) -> int:
         show_progress=False,
         log_enabled=not args.quiet,
         workers=args.workers,
+        batch_size=args.batch_size,
     )
     if not args.quiet:
         print(f"DB: {db_path}")
