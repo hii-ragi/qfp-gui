@@ -8,6 +8,7 @@ dist/
 test/
 *.sqlite3
 *.db
+qfp-gui.json
 FLOWCHART.md
 
 # Byte-compiled / optimized / DLL files

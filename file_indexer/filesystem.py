@@ -18,6 +18,21 @@ def iter_files(root: Path, excluded_paths: set[Path]):
             yield path
 
 
+def iter_directory_entries(root: Path, excluded_paths: set[Path]) -> list[Path]:
+    """ファイルマネージャー表示用に、指定フォルダ直下の項目を返します。"""
+    try:
+        entries = [
+            path
+            for path in root.iterdir()
+            if not is_denied_name(path.name)
+            and (path.is_dir() or not should_skip_path(path, excluded_paths))
+        ]
+    except OSError:
+        return []
+
+    return sorted(entries, key=lambda path: (not path.is_dir(), path.name.casefold()))
+
+
 def should_skip_path(path: Path, excluded_paths: set[Path]) -> bool:
     """deny_patterns.jsonやDB都合で探索から外すべきパスか判定します。"""
     if is_denied_name(path.name) or path.suffix.lower() in DENIED_EXTENSIONS:

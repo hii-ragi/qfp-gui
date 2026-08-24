@@ -28,7 +28,7 @@ def search_files_fts(conn: sqlite3.Connection, query: str, limit: int) -> list[s
     """FTS5 を使った全文検索です。"""
     return conn.execute(
         """
-        SELECT files.path, files.relative_path, files.size, files.modified_at,
+        SELECT files.*,
                snippet(files_fts, 3, '[', ']', ' ... ', 12) AS snippet
         FROM files_fts
         JOIN files ON files.id = files_fts.file_id
@@ -45,7 +45,7 @@ def search_files_like(conn: sqlite3.Connection, query: str, limit: int) -> list[
     like_query = f"%{query}%"
     return conn.execute(
         """
-        SELECT path, relative_path, size, modified_at,
+        SELECT *,
                substr(content, 1, 160) AS snippet
         FROM files
         WHERE name LIKE ?
