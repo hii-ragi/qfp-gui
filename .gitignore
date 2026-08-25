@@ -1,15 +1,18 @@
-# original ignore file from
-__pycache__/
+# Project tracking policy
+# Keep in git: source code, project docs, packaging metadata, dependency list.
+# Ignore: local runtime state, generated build output, environment folders, and user config.
+
+# Local runtime / generated files
 .agents/
 .codex/
+.vscode/
+.venv/
+__pycache__/
 build/
 dist/
-.vscode/
-test/
 *.sqlite3
 *.db
 qfp-gui.json
-FLOWCHART.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

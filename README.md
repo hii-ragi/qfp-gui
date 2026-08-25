@@ -21,7 +21,8 @@
 
 - Windows, linux
 - Python 3.10 以降を想定
-- 外部ライブラリは不要です。Tkinter、SQLite、FTS5 など Python 標準ライブラリを使用します。
+- PySide6 6.8 以降
+- SQLite、FTS5 など Python 標準ライブラリの機能
 
 ## 起動
 
@@ -31,6 +32,7 @@ releaseにビルド済みパッケージが存在します。(exeファイル)
 
 #### CLIからパッケージをそろえて実行する
 ```powershell
+pip install -r requirements.txt
 python qfp-gui.py
 ```
 
