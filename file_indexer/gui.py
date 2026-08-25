@@ -1,4 +1,4 @@
-"""PySide6を使ったファイルマネージャー風GUIを提供します。"""
+"""PySide6を使ったGUIを提供します"""
 
 import os
 import queue
@@ -29,7 +29,7 @@ GUI_CONFIG_JSON = Path.cwd() / "qfp-gui.json"
 
 
 class QfpApp(QMainWindow):
-    """フォルダのインデックス作成と検索を行うGUIです。"""
+    """フォルダのインデックス作成と検索を行うGUI"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -268,11 +268,13 @@ class QfpApp(QMainWindow):
             QMainWindow {{ background-color: {bg}; color: {fg}; }}
             QWidget {{ background-color: {bg}; color: {fg}; }}
             QTabWidget::pane {{ border: 1px solid {border}; background-color: {bg}; }}
-            QTabBar::tab {{ background: {field_bg}; color: {fg}; padding: 6px 12px; border: 1px solid {border}; border-top-left-radius: 8px; border-top-right-radius: 8px; border-bottom: none; }}
-            QTabBar::tab:selected {{ background: {accent}; color: {fg}; border-top-left-radius: 8px; border-top-right-radius: 8px; }}
+            QTabBar::tab {{ background: {field_bg}; color: {fg}; padding: 6px 12px; border: 1px solid {border}; border-top-left-radius: 4px; border-top-right-radius: 4px; border-bottom: none; }}
+            QTabBar::tab:selected {{ background: {accent}; color: {fg}; border-top-left-radius: 4px; border-top-right-radius: 4px; }}
+            QSpinBox::up-button {{subcontrol-origin: border; subcontrol-position: top right;width: 16px;}}
+            QSpinBox::down-button {{subcontrol-origin: border; subcontrol-position: bottom right;width: 16px;}}
             QLineEdit, QSpinBox, QTextEdit, QTreeWidget {{ background-color: {field_bg}; color: {fg}; border: 1px solid {border}; }}
             QPushButton {{ background-color: {accent}; color: {fg}; border: 1px solid {border}; border-radius: 4px; padding: 2px 10px; }}
-            QPushButton:disabled {{ background-color: {field_bg}; color: {fg}; opacity: 0.7; border-radius: 8px; }}
+            QPushButton:disabled {{ background-color: {field_bg}; color: {fg}; opacity: 0.7; border-radius: 4px; }}
             QProgressBar {{ border: 1px solid {border}; background-color: {field_bg}; color: {fg}; }}
             QProgressBar::chunk {{ background-color: {accent}; }}
             QLabel {{ color: {fg}; }}
@@ -292,7 +294,7 @@ class QfpApp(QMainWindow):
             self.file_tree.setColumnHidden(index, column not in self.visible_columns)
 
     def open_column_menu(self, position) -> None:
-        """TreeView本体の右クリックメニューを表示します。"""
+        """TreeView本体の右クリックメニューを表示"""
         item = self.file_tree.itemAt(position)
         global_position = self.file_tree.viewport().mapToGlobal(position)
         if item is None:
@@ -307,17 +309,17 @@ class QfpApp(QMainWindow):
         menu.exec(global_position)
 
     def open_header_column_menu(self, position) -> None:
-        """TreeViewヘッダーの右クリックで表示列メニューを開きます。"""
+        """TreeViewヘッダーの右クリックで表示列メニューを開く"""
         self._show_column_menu(self.file_tree.header().mapToGlobal(position))
 
     def _show_column_menu(self, global_position) -> None:
-        """DB列の表示・非表示メニューを指定位置に表示します。"""
+        """DB列の表示・非表示メニューを指定位置に表示"""
         menu = QMenu(self)
         self._add_column_actions(menu)
         menu.exec(global_position)
 
     def _add_column_actions(self, menu: QMenu) -> None:
-        """DB列の表示・非表示アクションをメニューへ追加します。"""
+        """DB列の表示・非表示アクションをメニューへ追加"""
         for column in self.file_columns:
             action = menu.addAction(self.column_labels[column])
             action.setCheckable(True)
@@ -325,8 +327,10 @@ class QfpApp(QMainWindow):
             action.triggered.connect(lambda checked, selected=column: self.toggle_column(selected, checked))
 
     def open_in_explorer(self, item: QTreeWidgetItem) -> None:
-        """選択したファイルまたはフォルダをエクスプローラーで開きます。"""
-        path = Path(str(item.data(0, Qt.ItemDataRole.UserRole))).resolve()
+        """選択したファイルまたはフォルダをエクスプローラーで開く"""
+        raw_path = str(item.data(0, Qt.ItemDataRole.UserRole))
+        normalized_path = os.path.normpath(raw_path)
+        path = Path(normalized_path)
         if not path.exists():
             QMessageBox.warning(self, "QFP", f"Path not found:\n{path}")
             return
@@ -334,12 +338,19 @@ class QfpApp(QMainWindow):
             if sys.platform == "win32":
                 if path.is_dir():
                     os.startfile(str(path))
+                elif self._is_smb_path(normalized_path):
+                    os.startfile(str(path.parent))
                 else:
                     subprocess.Popen(["explorer.exe", f"/select,{path}"])
             else:
                 webbrowser.open(path.parent.as_uri() if path.is_file() else path.as_uri())
         except OSError as exc:
             QMessageBox.warning(self, "QFP", f"Could not open Explorer:\n{path}\n\n{exc}")
+
+    @staticmethod
+    def _is_smb_path(path: str) -> bool:
+        """UNC形式のネットワークパスか判定"""
+        return path.startswith(("\\\\", "//"))
 
     def toggle_column(self, column: str, visible: bool) -> None:
         if not visible and len(self.visible_columns) == 1:
