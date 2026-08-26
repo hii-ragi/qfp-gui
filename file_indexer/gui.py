@@ -8,10 +8,10 @@ import threading
 import webbrowser
 from datetime import datetime
 from pathlib import Path
-from typing import Mapping, cast
+from typing import Callable, Mapping, cast
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QApplication, QColorDialog, QComboBox, QFileDialog, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QGroupBox, QMainWindow, QMenu, QMessageBox, QProgressBar,
@@ -26,6 +26,39 @@ from file_indexer.search import search_files, show_stats
 
 
 GUI_CONFIG_JSON = Path.cwd() / "qfp-gui.json"
+
+
+class FileTreeItem(QTreeWidgetItem):
+    """ファイル一覧のID列を数値としてソートする項目"""
+
+    def __lt__(self, other: QTreeWidgetItem) -> bool:
+        tree = self.treeWidget()
+        if tree is not None and tree.sortColumn() == 0:
+            try:
+                return int(self.text(0)) < int(other.text(0))
+            except ValueError:
+                return self.text(0) < other.text(0)
+        return super().__lt__(other)
+
+
+class FileTreeWidget(QTreeWidget):
+    """マウスサイドボタンでフォルダー移動できるファイル一覧"""
+
+    def __init__(self, up_callback: Callable[[], None], down_callback: Callable[[], None]) -> None:
+        super().__init__()
+        self._up_callback = up_callback
+        self._down_callback = down_callback
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.XButton1:
+            self._up_callback()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.XButton2:
+            self._down_callback()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 class QfpApp(QMainWindow):
@@ -48,6 +81,7 @@ class QfpApp(QMainWindow):
         self.text_color = QColor(str(config.get("text_color", "#1f1f1f")))
         self.file_columns = ("id", "root", "path", "relative_path", "name", "extension", "size", "modified_at", "mime_type", "sha256", "indexed_at")
         self.column_labels = {"id": "ID", "root": "Root", "path": "Path", "relative_path": "Relative path", "name": "Name", "extension": "Extension", "size": "Size", "modified_at": "Modified", "mime_type": "MIME type", "sha256": "SHA-256", "indexed_at": "Indexed"}
+        self._file_icons: dict[str, QIcon] = {}
         configured_columns = cast(list[str], config["visible_columns"])
         self.visible_columns = [column for column in self.file_columns if column in configured_columns] or ["name", "extension", "size", "modified_at"]
         self.message_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -100,11 +134,11 @@ class QfpApp(QMainWindow):
         layout = QVBoxLayout(self.files_tab)
         path_row = QHBoxLayout()
         self.path_edit = QLineEdit(str(self.folder))
-        up_button = QPushButton("Up")
+        up_button = QPushButton("←")
         up_button.clicked.connect(self.go_to_parent)
-        go_button = QPushButton("Go")
+        go_button = QPushButton("↵")
         go_button.clicked.connect(self.go_to_path)
-        refresh_button = QPushButton("Refresh")
+        refresh_button = QPushButton("↻")
         refresh_button.clicked.connect(self.refresh_file_browser)
         path_row.addWidget(up_button)
         path_row.addWidget(self.path_edit, 1)
@@ -125,7 +159,7 @@ class QfpApp(QMainWindow):
         search_button.clicked.connect(self.run_search)
         search_row.addWidget(search_button)
         layout.addLayout(search_row)
-        self.file_tree = QTreeWidget()
+        self.file_tree = FileTreeWidget(self.go_to_parent, self.go_to_selected_folder)
         self.file_tree.setColumnCount(len(self.file_columns))
         self.file_tree.setHeaderLabels([self.column_labels[column] for column in self.file_columns])
         self.file_tree.setAlternatingRowColors(True)
@@ -383,9 +417,33 @@ class QfpApp(QMainWindow):
         self.status_label.setText(f"{self.file_tree.topLevelItemCount()} items")
 
     def _insert_file_tree_row(self, path: Path, values: Mapping[str, object]) -> None:
-        item = QTreeWidgetItem([str(values.get(column, "")) for column in self.file_columns])
+        item = FileTreeItem([str(values.get(column, "")) for column in self.file_columns])
         item.setData(0, Qt.ItemDataRole.UserRole, str(path))
+        item.setIcon(self.file_columns.index("name"), self._icon_for_path(path))
         self.file_tree.addTopLevelItem(item)
+
+    def _icon_for_path(self, path: Path) -> QIcon:
+        """パスの種類に応じたSVGアイコンを返す"""
+        if path.is_dir():
+            icon_name = "folder"
+        elif path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"}:
+            icon_name = "image"
+        elif path.suffix.lower() in {".zip", ".7z", ".rar", ".tar", ".gz"}:
+            icon_name = "archive"
+        elif path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}:
+            icon_name = "database"
+        elif path.suffix.lower() in {".py", ".js", ".ts", ".html", ".css", ".json", ".xml", ".yaml", ".yml"}:
+            icon_name = "code"
+        else:
+            icon_name = "file"
+
+        if icon_name not in self._file_icons:
+            if getattr(sys, "frozen", False):
+                asset_root = Path(str(getattr(sys, "_MEIPASS", Path.cwd()))) / "file_indexer" / "assets"
+            else:
+                asset_root = Path(__file__).parent / "assets"
+            self._file_icons[icon_name] = QIcon(str(asset_root / f"{icon_name}.svg"))
+        return self._file_icons[icon_name]
 
     def open_file_tree_item(self, item: QTreeWidgetItem, _column: int) -> None:
         path = Path(str(item.data(0, Qt.ItemDataRole.UserRole)))
@@ -401,6 +459,16 @@ class QfpApp(QMainWindow):
     def go_to_parent(self) -> None:
         self.path_edit.setText(str(Path(self.path_edit.text()).expanduser().resolve().parent))
         self.refresh_file_browser()
+
+    def go_to_selected_folder(self) -> None:
+        """選択中のフォルダーへ移動"""
+        selected_items = self.file_tree.selectedItems()
+        if not selected_items:
+            return
+        path = Path(str(selected_items[0].data(0, Qt.ItemDataRole.UserRole)))
+        if path.is_dir():
+            self.path_edit.setText(str(path))
+            self.refresh_file_browser()
 
     def go_to_path(self) -> None:
         self.refresh_file_browser()
