@@ -13,6 +13,8 @@ dist/
 *.sqlite3
 *.db
 qfp-gui.json
+*.txt
+*.text
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

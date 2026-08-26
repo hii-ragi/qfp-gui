@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable, Mapping, cast
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QColorDialog, QComboBox, QFileDialog, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QGroupBox, QMainWindow, QMenu, QMessageBox, QProgressBar,
@@ -75,6 +75,7 @@ class QfpApp(QMainWindow):
         self.workers = int(cast(int, config["workers"]))
         self.batch_size = int(cast(int, config["batch_size"]))
         self.max_text_bytes = int(cast(int, config["max_text_bytes"]))
+        self.font_size = int(cast(int, config.get("font_size", 12)))
         self.theme_name = str(config.get("theme", "Default"))
         self.accent_color = QColor(str(config.get("accent_color", "#4f8cff")))
         self.background_color = QColor(str(config.get("background_color", "#f5f5f5")))
@@ -92,12 +93,13 @@ class QfpApp(QMainWindow):
 
     @staticmethod
     def _load_gui_config() -> dict[str, object]:
-        defaults: dict[str, object] = {"folder": str(Path.cwd()), "database": str((Path.cwd() / DEFAULT_DB).resolve()), "workers": DEFAULT_WORKERS, "batch_size": DEFAULT_BATCH_SIZE, "max_text_bytes": 1024 * 1024, "visible_columns": ["name", "extension", "size", "modified_at"], "theme": "Default", "accent_color": "#4f8cff", "background_color": "#f5f5f5", "text_color": "#1f1f1f"}
+        defaults: dict[str, object] = {"folder": str(Path.cwd()), "database": str((Path.cwd() / DEFAULT_DB).resolve()), "workers": DEFAULT_WORKERS, "batch_size": DEFAULT_BATCH_SIZE, "max_text_bytes": 1024 * 1024, "visible_columns": ["name", "extension", "size", "modified_at"], "theme": "Default", "accent_color": "#4f8cff", "background_color": "#f5f5f5", "text_color": "#1f1f1f", "font_size": 12}
         data = load_json(GUI_CONFIG_JSON, defaults)
         merged = {**defaults, **data} if isinstance(data, dict) else defaults
         merged["workers"] = int(cast(int, merged["workers"]))
         merged["batch_size"] = int(cast(int, merged["batch_size"]))
         merged["max_text_bytes"] = int(cast(int, merged["max_text_bytes"]))
+        merged["font_size"] = int(cast(int, merged.get("font_size", 12)))
         merged["visible_columns"] = cast(list[str], merged["visible_columns"])
         merged["theme"] = str(merged.get("theme", "Default"))
         merged["accent_color"] = str(merged.get("accent_color", "#4f8cff"))
@@ -106,7 +108,7 @@ class QfpApp(QMainWindow):
         return merged
 
     def _save_gui_config(self) -> None:
-        write_json(GUI_CONFIG_JSON, {"folder": str(self.folder), "database": str(self.db_path), "workers": self.workers, "batch_size": self.batch_size, "max_text_bytes": self.max_text_bytes, "visible_columns": self.visible_columns, "theme": self.theme_name, "accent_color": self.accent_color.name(), "background_color": self.background_color.name(), "text_color": self.text_color.name()})
+        write_json(GUI_CONFIG_JSON, {"folder": str(self.folder), "database": str(self.db_path), "workers": self.workers, "batch_size": self.batch_size, "max_text_bytes": self.max_text_bytes, "visible_columns": self.visible_columns, "theme": self.theme_name, "accent_color": self.accent_color.name(), "background_color": self.background_color.name(), "text_color": self.text_color.name(), "font_size": self.font_size})
 
     def _build_widgets(self) -> None:
         central = QWidget()
@@ -164,8 +166,6 @@ class QfpApp(QMainWindow):
         self.file_tree.setHeaderLabels([self.column_labels[column] for column in self.file_columns])
         self.file_tree.setAlternatingRowColors(True)
         self.file_tree.setSortingEnabled(True)
-        self.file_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.file_tree.customContextMenuRequested.connect(self.open_column_menu)
         self.file_tree.header().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.file_tree.header().customContextMenuRequested.connect(self.open_header_column_menu)
         self.file_tree.itemDoubleClicked.connect(self.open_file_tree_item)
@@ -254,7 +254,13 @@ class QfpApp(QMainWindow):
         self.text_button = QPushButton(self.text_color.name())
         self.text_button.clicked.connect(lambda: self._choose_color("text"))
         layout.addWidget(self.text_button, 3, 1)
-        layout.setRowStretch(4, 1)
+        layout.addWidget(QLabel("Font size"), 4, 0)
+        self.font_size_spin = QSpinBox()
+        self.font_size_spin.setRange(8, 24)
+        self.font_size_spin.setValue(self.font_size)
+        self.font_size_spin.valueChanged.connect(self._on_font_size_changed)
+        layout.addWidget(self.font_size_spin, 4, 1)
+        layout.setRowStretch(5, 1)
         self.tabs.addTab(self.settings_tab, "Setting")
 
     def _on_theme_changed(self, theme_name: str) -> None:
@@ -280,6 +286,10 @@ class QfpApp(QMainWindow):
         self.theme_combo.setCurrentText("Custom")
         self._apply_theme()
 
+    def _on_font_size_changed(self, font_size: int) -> None:
+        self.font_size = font_size
+        self._apply_theme()
+
     def _apply_theme(self) -> None:
         if self.theme_name == "Dark":
             self.accent_color = QColor("#2e63be")
@@ -297,21 +307,25 @@ class QfpApp(QMainWindow):
         fg = self.text_color.name()
         field_bg = self.background_color.lighter(120).name()
         border = self.accent_color.darker(120).name()
+
+        app_font = QFont(self.font().family(), self.font_size)
+        self.setFont(app_font)
+
         self.setStyleSheet(
             f"""
-            QMainWindow {{ background-color: {bg}; color: {fg}; }}
-            QWidget {{ background-color: {bg}; color: {fg}; }}
+            QMainWindow {{ background-color: {bg}; color: {fg}; font-size: {self.font_size}px; }}
+            QWidget {{ background-color: {bg}; color: {fg}; font-size: {self.font_size}px; }}
             QTabWidget::pane {{ border: 1px solid {border}; background-color: {bg}; }}
             QTabBar::tab {{ background: {field_bg}; color: {fg}; padding: 6px 12px; border: 1px solid {border}; border-top-left-radius: 4px; border-top-right-radius: 4px; border-bottom: none; }}
             QTabBar::tab:selected {{ background: {accent}; color: {fg}; border-top-left-radius: 4px; border-top-right-radius: 4px; }}
             QSpinBox::up-button {{subcontrol-origin: border; subcontrol-position: top right;width: 16px;}}
             QSpinBox::down-button {{subcontrol-origin: border; subcontrol-position: bottom right;width: 16px;}}
-            QLineEdit, QSpinBox, QTextEdit, QTreeWidget {{ background-color: {field_bg}; color: {fg}; border: 1px solid {border}; }}
-            QPushButton {{ background-color: {accent}; color: {fg}; border: 1px solid {border}; border-radius: 4px; padding: 2px 10px; }}
+            QLineEdit, QSpinBox, QTextEdit, QTreeWidget {{ background-color: {field_bg}; color: {fg}; border: 1px solid {border}; font-size: {self.font_size}px; }}
+            QPushButton {{ background-color: {accent}; color: {fg}; border: 1px solid {border}; border-radius: 4px; padding: 2px 10px; font-size: {self.font_size}px; }}
             QPushButton:disabled {{ background-color: {field_bg}; color: {fg}; opacity: 0.7; border-radius: 4px; }}
             QProgressBar {{ border: 1px solid {border}; background-color: {field_bg}; color: {fg}; }}
             QProgressBar::chunk {{ background-color: {accent}; }}
-            QLabel {{ color: {fg}; }}
+            QLabel {{ color: {fg}; font-size: {self.font_size}px; }}
             QGroupBox {{ border: 1px solid {border}; margin-top: 10px; color: {fg}; }}
             QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; color: {fg}; }}
             """
