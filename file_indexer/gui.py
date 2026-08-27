@@ -33,12 +33,18 @@ class FileTreeItem(QTreeWidgetItem):
 
     def __lt__(self, other: QTreeWidgetItem) -> bool:
         tree = self.treeWidget()
-        if tree is not None and tree.sortColumn() == 0:
+        if tree is None:
+            return False
+
+        column = tree.sortColumn()
+        left_value = self.text(column)
+        right_value = other.text(column)
+        if column == 0:
             try:
-                return int(self.text(0)) < int(other.text(0))
+                return int(left_value) < int(right_value)
             except ValueError:
-                return self.text(0) < other.text(0)
-        return super().__lt__(other)
+                pass
+        return left_value.casefold() < right_value.casefold()
 
 
 class FileTreeWidget(QTreeWidget):
