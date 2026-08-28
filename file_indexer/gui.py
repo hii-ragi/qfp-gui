@@ -10,13 +10,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Mapping, cast
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QFileSystemWatcher, QTimer, Qt
 from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QColorDialog, QComboBox, QFileDialog, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QGroupBox, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QPushButton, QSpinBox, QTabWidget, QTextEdit, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget, QCheckBox,
 )
 
 from file_indexer.config import DEFAULT_BATCH_SIZE, DEFAULT_DB, DEFAULT_WORKERS, load_json, write_json
@@ -82,6 +82,7 @@ class QfpApp(QMainWindow):
         self.batch_size = int(cast(int, config["batch_size"]))
         self.max_text_bytes = int(cast(int, config["max_text_bytes"]))
         self.font_size = int(cast(int, config.get("font_size", 12)))
+        self.auto_index = bool(config.get("auto_index", False))
         self.theme_name = str(config.get("theme", "Default"))
         self.accent_color = QColor(str(config.get("accent_color", "#4f8cff")))
         self.background_color = QColor(str(config.get("background_color", "#f5f5f5")))
@@ -94,12 +95,17 @@ class QfpApp(QMainWindow):
         self.message_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.index_thread: threading.Thread | None = None
         self.cancel_event: threading.Event | None = None
+        self.auto_index_watcher = QFileSystemWatcher(self)
+        self.auto_index_watcher.directoryChanged.connect(self._on_watched_path_changed)
+        self.auto_index_watcher.fileChanged.connect(self._on_watched_path_changed)
+        self._auto_index_pending = False
         self._build_widgets()
+        self._update_auto_index_watches()
         self._poll_queue()
 
     @staticmethod
     def _load_gui_config() -> dict[str, object]:
-        defaults: dict[str, object] = {"folder": str(Path.cwd()), "database": str((Path.cwd() / DEFAULT_DB).resolve()), "workers": DEFAULT_WORKERS, "batch_size": DEFAULT_BATCH_SIZE, "max_text_bytes": 1024 * 1024, "visible_columns": ["name", "extension", "size", "modified_at"], "theme": "Default", "accent_color": "#4f8cff", "background_color": "#f5f5f5", "text_color": "#1f1f1f", "font_size": 12}
+        defaults: dict[str, object] = {"folder": str(Path.cwd()), "database": str((Path.cwd() / DEFAULT_DB).resolve()), "workers": DEFAULT_WORKERS, "batch_size": DEFAULT_BATCH_SIZE, "max_text_bytes": 1024 * 1024, "visible_columns": ["name", "extension", "size", "modified_at"], "theme": "Default", "accent_color": "#4f8cff", "background_color": "#f5f5f5", "text_color": "#1f1f1f", "font_size": 12, "auto_index": False}
         data = load_json(GUI_CONFIG_JSON, defaults)
         merged = {**defaults, **data} if isinstance(data, dict) else defaults
         merged["workers"] = int(cast(int, merged["workers"]))
@@ -114,7 +120,7 @@ class QfpApp(QMainWindow):
         return merged
 
     def _save_gui_config(self) -> None:
-        write_json(GUI_CONFIG_JSON, {"folder": str(self.folder), "database": str(self.db_path), "workers": self.workers, "batch_size": self.batch_size, "max_text_bytes": self.max_text_bytes, "visible_columns": self.visible_columns, "theme": self.theme_name, "accent_color": self.accent_color.name(), "background_color": self.background_color.name(), "text_color": self.text_color.name(), "font_size": self.font_size})
+        write_json(GUI_CONFIG_JSON, {"folder": str(self.folder), "database": str(self.db_path), "workers": self.workers, "batch_size": self.batch_size, "max_text_bytes": self.max_text_bytes, "visible_columns": self.visible_columns, "theme": self.theme_name, "accent_color": self.accent_color.name(), "background_color": self.background_color.name(), "text_color": self.text_color.name(), "font_size": self.font_size, "auto_index": self.auto_index})
 
     def _build_widgets(self) -> None:
         central = QWidget()
@@ -172,6 +178,8 @@ class QfpApp(QMainWindow):
         self.file_tree.setHeaderLabels([self.column_labels[column] for column in self.file_columns])
         self.file_tree.setAlternatingRowColors(True)
         self.file_tree.setSortingEnabled(True)
+        self.file_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.file_tree.customContextMenuRequested.connect(self.open_column_menu)
         self.file_tree.header().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.file_tree.header().customContextMenuRequested.connect(self.open_header_column_menu)
         self.file_tree.itemDoubleClicked.connect(self.open_file_tree_item)
@@ -266,7 +274,11 @@ class QfpApp(QMainWindow):
         self.font_size_spin.setValue(self.font_size)
         self.font_size_spin.valueChanged.connect(self._on_font_size_changed)
         layout.addWidget(self.font_size_spin, 4, 1)
-        layout.setRowStretch(5, 1)
+        self.auto_index_check = QCheckBox("Auto index")
+        self.auto_index_check.setChecked(self.auto_index)
+        self.auto_index_check.toggled.connect(self._on_auto_index_changed)
+        layout.addWidget(self.auto_index_check, 5, 0, 1, 2)
+        layout.setRowStretch(6, 1)
         self.tabs.addTab(self.settings_tab, "Setting")
 
     def _on_theme_changed(self, theme_name: str) -> None:
@@ -296,25 +308,78 @@ class QfpApp(QMainWindow):
         self.font_size = font_size
         self._apply_theme()
 
+    def _on_auto_index_changed(self, enabled: bool) -> None:
+        self.auto_index = enabled
+        self._update_auto_index_watches()
+        self._save_gui_config()
+        self._append_output(f"Auto index {'enabled' if enabled else 'disabled'}.\n")
+        if enabled:
+            self._start_auto_index(self.folder)
+
+    def _start_auto_index(self, folder: Path) -> None:
+        if self.index_thread and self.index_thread.is_alive():
+            self._append_output("Auto index skipped: indexing is already running.\n")
+            return
+        self._append_output("Auto index started.\n")
+        self._start_index_for_folder(folder, recursive=False)
+
+    def _update_auto_index_watches(self) -> None:
+        directories = self.auto_index_watcher.directories()
+        files = self.auto_index_watcher.files()
+        if directories:
+            self.auto_index_watcher.removePaths(directories)
+        if files:
+            self.auto_index_watcher.removePaths(files)
+        if not self.auto_index or not self.folder.is_dir():
+            return
+        paths = [str(self.folder.resolve())]
+        try:
+            paths.extend(str(path) for path in self.folder.iterdir() if path.is_file())
+        except OSError:
+            return
+        self.auto_index_watcher.addPaths(paths)
+
+    def _on_watched_path_changed(self, _path: str) -> None:
+        if not self.auto_index or self._auto_index_pending:
+            return
+        self._append_output(f"Auto index change detected: {_path}\n")
+        self._auto_index_pending = True
+        QTimer.singleShot(300, self._run_scheduled_auto_index)
+
+    def _run_scheduled_auto_index(self) -> None:
+        self._auto_index_pending = False
+        if not self.auto_index or (self.index_thread and self.index_thread.is_alive()):
+            return
+        self._append_output("Auto index started.\n")
+        self._start_index_for_folder(self.folder, recursive=False)
+
     def _apply_theme(self) -> None:
         if self.theme_name == "Dark":
             self.accent_color = QColor("#2e63be")
             self.background_color = QColor("#1f1f22")
             self.text_color = QColor("#e6e6e6")
+            selection_color = QColor("#3d7bd9")
+            hover_color = QColor("#2a3f61")
         elif self.theme_name == "Default":
             self.accent_color = QColor("#A9A9A9")
             self.background_color = QColor("#f5f5f5")
             self.text_color = QColor("#1f1f1f")
+            selection_color = QColor("#b8d2ff")
+            hover_color = QColor("#e8f1ff")
         elif self.theme_name == "Custom":
-            pass
+            selection_color = self.accent_color
+            hover_color = self.accent_color.lighter(160)
 
         accent = self.accent_color.name()
         bg = self.background_color.name()
         fg = self.text_color.name()
+        selection = selection_color.name()
+        hover = hover_color.name()
         field_bg = self.background_color.lighter(120).name()
         border = self.accent_color.darker(120).name()
 
-        app_font = QFont(self.font().family(), self.font_size)
+        app_font = QFont(self.font().family())
+        app_font.setPointSize(max(1, self.font_size))
         self.setFont(app_font)
 
         self.setStyleSheet(
@@ -327,6 +392,8 @@ class QfpApp(QMainWindow):
             QSpinBox::up-button {{subcontrol-origin: border; subcontrol-position: top right;width: 16px;}}
             QSpinBox::down-button {{subcontrol-origin: border; subcontrol-position: bottom right;width: 16px;}}
             QLineEdit, QSpinBox, QTextEdit, QTreeWidget {{ background-color: {field_bg}; color: {fg}; border: 1px solid {border}; font-size: {self.font_size}px; }}
+            QTreeWidget::item:hover {{ background-color: {hover}; color: {fg}; }}
+            QTreeWidget::item:selected {{ background-color: {selection}; color: {fg}; }}
             QPushButton {{ background-color: {accent}; color: {fg}; border: 1px solid {border}; border-radius: 4px; padding: 2px 10px; font-size: {self.font_size}px; }}
             QPushButton:disabled {{ background-color: {field_bg}; color: {fg}; opacity: 0.7; border-radius: 4px; }}
             QProgressBar {{ border: 1px solid {border}; background-color: {field_bg}; color: {fg}; }}
@@ -352,14 +419,11 @@ class QfpApp(QMainWindow):
         item = self.file_tree.itemAt(position)
         global_position = self.file_tree.viewport().mapToGlobal(position)
         if item is None:
-            self._show_column_menu(global_position)
             return
 
         menu = QMenu(self)
-        open_in_explorer = menu.addAction("Open in Explorer")
+        open_in_explorer = menu.addAction("Open in Explorer ")
         open_in_explorer.triggered.connect(lambda: self.open_in_explorer(item))
-        menu.addSeparator()
-        self._add_column_actions(menu)
         menu.exec(global_position)
 
     def open_header_column_menu(self, position) -> None:
@@ -421,6 +485,7 @@ class QfpApp(QMainWindow):
         if not current.is_dir():
             QMessageBox.warning(self, "QFP", f"Folder not found:\n{current}")
             return
+        folder_changed = current != self.folder.resolve()
         self.folder = current
         self.path_edit.setText(str(current))
         self.file_tree.clear()
@@ -435,6 +500,9 @@ class QfpApp(QMainWindow):
                 values["modified_at"] = ""
             self._insert_file_tree_row(path, values)
         self.status_label.setText(f"{self.file_tree.topLevelItemCount()} items")
+        self._update_auto_index_watches()
+        if folder_changed and self.auto_index and hasattr(self, "index_button"):
+            self._start_auto_index(current)
 
     def _insert_file_tree_row(self, path: Path, values: Mapping[str, object]) -> None:
         item = FileTreeItem([str(values.get(column, "")) for column in self.file_columns])
@@ -534,20 +602,28 @@ class QfpApp(QMainWindow):
         self.folder, self.db_path = folder, db_path
         self.workers, self.batch_size, self.max_text_bytes = self.workers_spin.value(), self.batch_spin.value(), self.max_text_spin.value()
         self._save_gui_config()
+        self._start_index_for_folder(folder, recursive=True)
+
+    def _start_index_for_folder(self, folder: Path, recursive: bool) -> None:
+        self.folder = folder
         self.path_edit.setText(str(folder))
-        self.refresh_file_browser()
+        self._starting_index = True
+        try:
+            self.refresh_file_browser()
+        finally:
+            self._starting_index = False
         self.cancel_event = threading.Event()
         self.index_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.progress.setValue(0)
-        self._append_output("Index started.\n")
+        self._append_output(f"Index started ({'recursive' if recursive else 'current folder only'}): {folder}\n")
         self.status_label.setText("Indexing...")
-        self.index_thread = threading.Thread(target=self._index_worker, daemon=True)
+        self.index_thread = threading.Thread(target=self._index_worker, args=(folder, recursive), daemon=True)
         self.index_thread.start()
 
-    def _index_worker(self) -> None:
+    def _index_worker(self, folder: Path, recursive: bool) -> None:
         try:
-            stats = index_folder(self.db_path, self.folder, self.max_text_bytes, show_progress=False, log_enabled=True, logger=lambda message: self.message_queue.put(("log", message)), workers=self.workers, batch_size=self.batch_size, cancel_event=self.cancel_event, progress_callback=lambda current, total, label: self.message_queue.put(("progress", (current, total, label))))
+            stats = index_folder(self.db_path, folder, self.max_text_bytes, show_progress=False, log_enabled=True, logger=lambda message: self.message_queue.put(("log", message)), workers=self.workers, batch_size=self.batch_size, cancel_event=self.cancel_event, progress_callback=lambda current, total, label: self.message_queue.put(("progress", (current, total, label))), recursive=recursive)
             self.message_queue.put(("cancelled" if self.cancel_event and self.cancel_event.is_set() else "done", stats))
         except Exception as exc:
             self.message_queue.put(("error", exc))
@@ -577,7 +653,6 @@ class QfpApp(QMainWindow):
                 self.index_button.setEnabled(True)
                 self.cancel_button.setEnabled(False)
                 self.status_label.setText("Index complete" if kind == "done" else "Index cancelled")
-                self.refresh_file_browser()
                 self._append_output(f"Index {'complete' if kind == 'done' else 'cancelled'}: scanned {stats.scanned}, stored {stats.stored}, skipped {stats.skipped}, failed {stats.failed}\n")
             elif kind == "error":
                 self.index_button.setEnabled(True)

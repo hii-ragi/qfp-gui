@@ -7,9 +7,10 @@ from pathlib import Path
 from file_indexer.config import DENIED_EXTENSIONS, DENIED_NAMES
 
 
-def iter_files(root: Path, excluded_paths: set[Path]):
+def iter_files(root: Path, excluded_paths: set[Path], recursive: bool = True):
     """探索対象のファイルを返します。deny設定とDB自身は対象から外します。"""
-    for current_root, dir_names, file_names in os.walk(root):
+    walker = os.walk(root) if recursive else [(str(root), [], [path.name for path in root.iterdir() if path.is_file()])]
+    for current_root, dir_names, file_names in walker:
         dir_names[:] = [name for name in dir_names if not is_denied_name(name)]
         for file_name in file_names:
             path = Path(current_root) / file_name

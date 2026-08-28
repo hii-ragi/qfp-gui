@@ -48,6 +48,7 @@ def index_folder(
     batch_size: int = DEFAULT_BATCH_SIZE,
     progress_callback: Callable[[int, int, str], None] | None = None,
     cancel_event: Event | None = None,
+    recursive: bool = True,
 ) -> IndexStats:
     """指定フォルダを探索して DB に登録します。
 
@@ -65,7 +66,7 @@ def index_folder(
 
     if log_enabled:
         logger("ファイル一覧を作成しています...")
-    paths = list(iter_files(root, excluded_paths))
+    paths = list(iter_files(root, excluded_paths, recursive=recursive))
 
     stats = IndexStats()
     conn = connect(db_path)
