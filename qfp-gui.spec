@@ -5,7 +5,7 @@ a = Analysis(
     ['qfp-gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('file_indexer/assets/*.svg', 'file_indexer/assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -104,6 +104,25 @@ class QfpApp(QMainWindow):
         self._poll_queue()
 
     @staticmethod
+    def _info_icon(description: str) -> QLabel:
+        info = QLabel("i")
+        info.setToolTip(description)
+        asset_root = Path(str(getattr(sys, "_MEIPASS", Path.cwd()))) / "file_indexer" / "assets" if getattr(sys, "frozen", False) else Path(__file__).parent / "assets"
+        info.setPixmap(QIcon(str(asset_root / "info.svg")).pixmap(16, 16))
+        return info
+
+    @staticmethod
+    def _info_label(text: str, description: str) -> QWidget:
+        container = QWidget()
+        row = QHBoxLayout(container)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        row.addWidget(QLabel(text))
+        info = QfpApp._info_icon(description)
+        row.addWidget(info)
+        return container
+
+    @staticmethod
     def _load_gui_config() -> dict[str, object]:
         defaults: dict[str, object] = {"folder": str(Path.cwd()), "database": str((Path.cwd() / DEFAULT_DB).resolve()), "workers": DEFAULT_WORKERS, "batch_size": DEFAULT_BATCH_SIZE, "max_text_bytes": 1024 * 1024, "visible_columns": ["name", "extension", "size", "modified_at"], "theme": "Default", "accent_color": "#4f8cff", "background_color": "#f5f5f5", "text_color": "#1f1f1f", "font_size": 12, "auto_index": False}
         data = load_json(GUI_CONFIG_JSON, defaults)
@@ -192,13 +211,13 @@ class QfpApp(QMainWindow):
         self.index_tab = QWidget()
         layout = QGridLayout(self.index_tab)
         layout.setColumnStretch(1, 1)
-        layout.addWidget(QLabel("Target Folder"), 0, 0)
+        layout.addWidget(self._info_label("Target Folder", "Folder used for manual recursive indexing."), 0, 0)
         self.folder_edit = QLineEdit(str(self.folder))
         layout.addWidget(self.folder_edit, 0, 1)
         browse_folder_button = QPushButton("Browse")
         browse_folder_button.clicked.connect(self.choose_folder)
         layout.addWidget(browse_folder_button, 0, 2)
-        layout.addWidget(QLabel("Database File"), 1, 0)
+        layout.addWidget(self._info_label("Database File", "SQLite database file where indexed file metadata is stored."), 1, 0)
         self.db_edit = QLineEdit(str(self.db_path))
         layout.addWidget(self.db_edit, 1, 1)
         browse_db_button = QPushButton("Browse")
@@ -212,7 +231,12 @@ class QfpApp(QMainWindow):
         self.max_text_spin: QSpinBox = QSpinBox()
         for row, label, value, maximum, attr in ((2, "Hash workers", self.workers, 32, "workers_spin"), (3, "Batch size", self.batch_size, 10000, "batch_spin"), (4, "Max text bytes", self.max_text_bytes, 100 * 1024 * 1024, "max_text_spin")):
             settings_row = row - 2
-            settings_layout.addWidget(QLabel(label), settings_row, 0)
+            descriptions = {
+                "Hash workers": "Number of background workers used for hashing and reading files.",
+                "Batch size": "Number of prepared files written to the database in one batch.",
+                "Max text bytes": "Maximum file size whose text content is read for searching.",
+            }
+            settings_layout.addWidget(self._info_label(label, descriptions[label]), settings_row, 0)
             spin = getattr(self, attr)
             spin.setRange(1 if row < 4 else 1024, maximum)
             spin.setValue(value)
@@ -250,7 +274,7 @@ class QfpApp(QMainWindow):
         self.settings_tab = QWidget()
         layout = QGridLayout(self.settings_tab)
         layout.setColumnStretch(1, 1)
-        layout.addWidget(QLabel("Theme"), 0, 0)
+        layout.addWidget(self._info_label("Theme", "Select the application's color theme."), 0, 0)
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["Default", "Dark", "Custom"])
         self.theme_combo.setCurrentText(self.theme_name)
@@ -268,16 +292,22 @@ class QfpApp(QMainWindow):
         self.text_button = QPushButton(self.text_color.name())
         self.text_button.clicked.connect(lambda: self._choose_color("text"))
         layout.addWidget(self.text_button, 3, 1)
-        layout.addWidget(QLabel("Font size"), 4, 0)
+        layout.addWidget(self._info_label("Font size", "Font size used throughout the application."), 4, 0)
         self.font_size_spin = QSpinBox()
         self.font_size_spin.setRange(8, 24)
         self.font_size_spin.setValue(self.font_size)
         self.font_size_spin.valueChanged.connect(self._on_font_size_changed)
         layout.addWidget(self.font_size_spin, 4, 1)
         self.auto_index_check = QCheckBox("Auto index")
+        self.auto_index_check.setToolTip("Automatically index files in the currently viewed folder when its contents change.")
         self.auto_index_check.setChecked(self.auto_index)
         self.auto_index_check.toggled.connect(self._on_auto_index_changed)
-        layout.addWidget(self.auto_index_check, 5, 0, 1, 2)
+        auto_index_row = QHBoxLayout()
+        auto_index_row.setContentsMargins(0, 0, 0, 0)
+        auto_index_row.addWidget(self.auto_index_check)
+        auto_index_row.addWidget(self._info_icon("Automatically index files in the currently viewed folder when its contents change."))
+        auto_index_row.addStretch(1)
+        layout.addLayout(auto_index_row, 5, 0, 1, 2)
         layout.setRowStretch(6, 1)
         self.tabs.addTab(self.settings_tab, "Setting")
 
