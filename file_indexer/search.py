@@ -29,9 +29,9 @@ def search_files_fts(conn: sqlite3.Connection, query: str, limit: int) -> list[s
     return conn.execute(
         """
         SELECT files.*,
-               snippet(files_fts, 3, '[', ']', ' ... ', 12) AS snippet
+               snippet(files_fts, 2, '[', ']', ' ... ', 12) AS snippet
         FROM files_fts
-        JOIN files ON files.id = files_fts.file_id
+        JOIN files ON files.id = files_fts.rowid
         WHERE files_fts MATCH ?
         ORDER BY rank
         LIMIT ?

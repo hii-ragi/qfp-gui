@@ -115,3 +115,10 @@ pyinstaller qfp-gui.spec
 ```
 
 生成された実行ファイルは `dist` フォルダに出力されます。
+
+### GitHub Actionsでの自動ビルド
+
+pushするとWindows版を自動ビルドします。Actionsタブの対象実行を開き、
+Artifactsから `qfp-gui-windows-x64` をダウンロードできます。
+ZIPを展開し、同梱フォルダを維持したまま `qfp-gui.exe` を起動してください。
+成果物の保存期間は14日です。Run workflowから手動実行もできます。

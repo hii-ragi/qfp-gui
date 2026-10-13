@@ -58,19 +58,38 @@ def init_db(conn: sqlite3.Connection) -> bool:
 
 
 def _ensure_fts_table(conn: sqlite3.Connection) -> None:
-    """旧形式の FTS テーブルが残っている場合は作り直します。"""
+    """files.id と FTS の rowid を対応させ、旧形式は保存済み本文から移行します。"""
     existing = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'files_fts'"
     ).fetchone()
-    if existing and "content='files'" in (existing["sql"] or ""):
-        conn.execute("DROP TABLE files_fts")
+    if existing:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(files_fts)")}
+        sql = "".join((existing["sql"] or "").lower().split())
+        if "file_id" not in columns and "content=" not in sql:
+            return
 
-    conn.execute(
-        """
-        CREATE VIRTUAL TABLE IF NOT EXISTS files_fts
-        USING fts5(file_id UNINDEXED, name, relative_path, content)
-        """
-    )
+    # 作り直しと再登録を一体にし、失敗した場合は元のFTSを維持します。
+    conn.execute("SAVEPOINT migrate_files_fts")
+    try:
+        if existing:
+            conn.execute("DROP TABLE files_fts")
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE files_fts
+            USING fts5(name, relative_path, content)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO files_fts(rowid, name, relative_path, content)
+            SELECT id, name, relative_path, content FROM files
+            """
+        )
+    except Exception:
+        conn.execute("ROLLBACK TO migrate_files_fts")
+        raise
+    finally:
+        conn.execute("RELEASE migrate_files_fts")
 
 
 def upsert_file_record(
@@ -163,18 +182,19 @@ def upsert_file_records(conn: sqlite3.Connection, records: list[dict[str, object
 
     try:
         conn.executemany(
-            "DELETE FROM files_fts WHERE file_id = ?",
+            "DELETE FROM files_fts WHERE rowid = ?",
             [(ids_by_path[record["path"]],) for record in records],
         )
         conn.executemany(
-            "INSERT INTO files_fts(file_id, name, relative_path, content) VALUES (?, ?, ?, ?)",
+            "INSERT INTO files_fts(rowid, name, relative_path, content) VALUES (?, ?, ?, ?)",
             [
                 (ids_by_path[record["path"]], record["name"], record["relative_path"], record["content"])
                 for record in records
             ],
         )
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError as exc:
+        if str(exc) != "no such table: files_fts":
+            raise
 
 
 def upsert_fts_record(
@@ -182,10 +202,11 @@ def upsert_fts_record(
 ) -> None:
     """FTS5 の検索テーブルを更新します。FTS5 がない環境では何もしません。"""
     try:
-        conn.execute("DELETE FROM files_fts WHERE file_id = ?", (row_id,))
+        conn.execute("DELETE FROM files_fts WHERE rowid = ?", (row_id,))
         conn.execute(
-            "INSERT INTO files_fts(file_id, name, relative_path, content) VALUES (?, ?, ?, ?)",
+            "INSERT INTO files_fts(rowid, name, relative_path, content) VALUES (?, ?, ?, ?)",
             (row_id, name, relative_path, content),
         )
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError as exc:
+        if str(exc) != "no such table: files_fts":
+            raise
